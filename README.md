@@ -1,4 +1,4 @@
-# ДЭ-2026 AU — полный разбор на главной странице
+# ДЭ-2026 AU — полный разбор
 
 > Учебная методичка для подготовки к демонстрационному экзамену по 09.02.06 «Сетевое и системное администрирование».  
 > Вариант адаптирован под `au-team.irpo`, адресацию `192.168.*`, VLAN `120 / 220 / 888` и GRE `10.10.10.0/30`.
@@ -10,9 +10,11 @@
 
 ---
 
-## 0. Важно перед началом
+## 0. Что это и как пользоваться
 
-Этот репозиторий — не официальный эталон, а учебный разбор. Перед выполнением команд сверяй:
+Это не официальный эталон, а учебный разбор. Он сделан в формате одной большой главной страницы: сначала таблицы, потом быстрый расчёт IP, потом Модуль 1, 2, 3 по порядку.
+
+Перед выполнением команд всегда сверяй:
 
 - свой вариант задания;
 - имена интерфейсов;
@@ -20,10 +22,10 @@
 - IP-адреса;
 - порт SSH;
 - домен;
-- пароли;
+- пароль;
 - ОС: ALT Linux, Debian, EcoRouter или другая.
 
-В публичной версии пароль заменён на переменную:
+Пароль в публичной версии заменён на переменную:
 
 ```text
 CHANGE_ME_FROM_TASK
@@ -65,19 +67,19 @@ CHANGE_ME_FROM_TASK
 
 # 3. IP-адреса устройств
 
-| Устройство | Интерфейс | IP | Gateway | DNS |
+| Устройство | Интерфейс / логический интерфейс | IP | Gateway | DNS |
 |---|---|---|---|---|
 | ISP | external | DHCP | DHCP | DHCP |
 | ISP | to HQ | `172.16.1.1/28` | — | — |
 | ISP | to BR | `172.16.2.1/28` | — | — |
-| HQ-RTR | WAN | `172.16.1.2/28` | `172.16.1.1` | `77.88.8.8` |
+| HQ-RTR | ISP/WAN | `172.16.1.2/28` | `172.16.1.1` | `77.88.8.8` |
 | HQ-RTR | VLAN120 | `192.168.120.1/27` | — | — |
 | HQ-RTR | VLAN220 | `192.168.220.1/27` | — | — |
 | HQ-RTR | VLAN888 | `192.168.88.1/29` | — | — |
-| HQ-RTR | GRE | `10.10.10.1/30` | — | — |
-| BR-RTR | WAN | `172.16.2.2/28` | `172.16.2.1` | `77.88.8.8` |
-| BR-RTR | LAN | `192.168.30.1/28` | — | — |
-| BR-RTR | GRE | `10.10.10.2/30` | — | — |
+| HQ-RTR | tunnel.1 / gre1 | `10.10.10.1/30` | — | — |
+| BR-RTR | ISP/WAN | `172.16.2.2/28` | `172.16.2.1` | `77.88.8.8` |
+| BR-RTR | LOCAL | `192.168.30.1/28` | — | — |
+| BR-RTR | tunnel.1 / gre1 | `10.10.10.2/30` | — | — |
 | HQ-SRV | LAN | `192.168.120.2/27` | `192.168.120.1` | `127.0.0.1`, `77.88.8.8` |
 | BR-SRV | LAN | `192.168.30.2/28` | `192.168.30.1` | `192.168.120.2` |
 | HQ-CLI | LAN | DHCP | `192.168.220.1` | `192.168.120.2` |
@@ -108,7 +110,7 @@ usable = 2^(32 - prefix) - 2
 
 1. Смотришь, сколько адресов нужно по заданию.
 2. Берёшь минимальную подходящую маску.
-3. Первый usable адрес отдаёшь шлюзу.
+3. Первый usable-адрес отдаёшь шлюзу.
 4. Следующий адрес отдаёшь серверу.
 5. Для DHCP оставляешь диапазон после статических адресов.
 6. Проверяешь, что подсети не пересекаются.
@@ -142,55 +144,56 @@ usable = 2^(32 - prefix) - 2
 
 ---
 
-# 5. Общие переменные для команд
+# 5. Перед командами: определить интерфейсы
 
-В командах ниже используются переменные. Перед выполнением подставь свои интерфейсы.
-
-```bash
-DOMAIN="au-team.irpo"
-PASS="CHANGE_ME_FROM_TASK"
-SSH_PORT="2026"
-
-# ISP
-ISP_EXT_IF="enp0s3"
-ISP_HQ_IF="enp0s8"
-ISP_BR_IF="enp0s9"
-
-# HQ-RTR
-HQ_WAN_IF="enp0s3"
-HQ_TRUNK_IF="enp0s8"
-
-# BR-RTR
-BR_WAN_IF="enp0s3"
-BR_LAN_IF="enp0s8"
-
-# Servers
-SRV_IF="enp0s3"
-```
-
-Проверка интерфейсов:
+На Linux/ALT:
 
 ```bash
 ip -br link
 ip -br a
 ```
 
+На EcoRouter:
+
+```text
+show port brief
+show ip interface brief
+show running-config
+```
+
+В примерах ниже принята такая логика:
+
+| Устройство | Порт | Куда смотрит |
+|---|---|---|
+| HQ-RTR | `ge0` | ISP |
+| HQ-RTR | `ge1` | trunk в сторону HQ-SW / VLAN-сегмента |
+| BR-RTR | `ge0` | ISP |
+| BR-RTR | `ge1` | BR-SRV / LOCAL |
+| ISP | `enp0s3` | внешний интернет |
+| ISP | `enp0s8` | HQ-RTR |
+| ISP | `enp0s9` | BR-RTR |
+
+Если у тебя порты называются `te0`, `ens18`, `enp6s20` и так далее — меняй команды под свои имена.
+
 ---
 
 # Модуль 1 — Настройка сетевой инфраструктуры
 
-## 1.1 Hostname
+В этом модуле самое важное — не просто поставить IP, а правильно связать **физический порт → service-instance → VLAN encapsulation → IP interface**. На EcoRouter это критично: если создать IP-интерфейс, но не подключить его к порту через `connect ip interface`, трафик не пойдёт.
 
-На каждой машине:
+---
+
+## 1.1 Hostname и домен
+
+### Linux / ALT
+
+На каждой машине выполняется только своя строка:
 
 ```bash
-hostnamectl set-hostname isp.au-team.irpo
-hostnamectl set-hostname hq-rtr.au-team.irpo
-hostnamectl set-hostname br-rtr.au-team.irpo
-hostnamectl set-hostname hq-srv.au-team.irpo
-hostnamectl set-hostname br-srv.au-team.irpo
-hostnamectl set-hostname hq-cli.au-team.irpo
-exec bash
+hostnamectl set-hostname isp.au-team.irpo; exec bash
+hostnamectl set-hostname hq-srv.au-team.irpo; exec bash
+hostnamectl set-hostname br-srv.au-team.irpo; exec bash
+hostnamectl set-hostname hq-cli.au-team.irpo; exec bash
 ```
 
 Проверка:
@@ -200,273 +203,737 @@ hostname
 hostname -f
 ```
 
+### EcoRouter HQ-RTR
+
+```text
+enable
+configure terminal
+hostname hq-rtr
+ip domain-name au-team.irpo
+write memory
+```
+
+### EcoRouter BR-RTR
+
+```text
+enable
+configure terminal
+hostname br-rtr
+ip domain-name au-team.irpo
+write memory
+```
+
+Проверка:
+
+```text
+show hostname
+show running-config | include domain-name
+```
+
 ---
 
-## 1.2 ISP: адресация и NAT
+## 1.2 ISP на Linux/ALT: три интерфейса и NAT
 
-Пример логики для Linux-маршрутизатора:
+ISP обычно имеет:
+
+| Интерфейс | Роль | Адрес |
+|---|---|---|
+| external | интернет от гипервизора / DHCP | DHCP |
+| to HQ-RTR | сеть `172.16.1.0/28` | `172.16.1.1/28` |
+| to BR-RTR | сеть `172.16.2.0/28` | `172.16.2.1/28` |
+
+Пример через `/etc/net/ifaces` для ALT.
+
+### Внешний интерфейс ISP по DHCP
 
 ```bash
-# Включить маршрутизацию
-sysctl -w net.ipv4.ip_forward=1
+mkdir -p /etc/net/ifaces/enp0s3
+cat > /etc/net/ifaces/enp0s3/options << 'EOF'
+TYPE=eth
+CONFIG_IPV4=yes
+BOOTPROTO=dhcp
+SYSTEMD_BOOTPROTO=dhcp4
+DISABLED=no
+NM_CONTROLLED=no
+SYSTEMD_CONTROLLED=no
+EOF
+```
 
-# Проверить интерфейсы
-ip -br a
+### Интерфейс ISP в сторону HQ-RTR
 
-# Пример назначения адресов
-ip addr add 172.16.1.1/28 dev "$ISP_HQ_IF"
-ip addr add 172.16.2.1/28 dev "$ISP_BR_IF"
-ip link set "$ISP_HQ_IF" up
-ip link set "$ISP_BR_IF" up
+```bash
+mkdir -p /etc/net/ifaces/enp0s8
+cat > /etc/net/ifaces/enp0s8/options << 'EOF'
+TYPE=eth
+CONFIG_IPV4=yes
+BOOTPROTO=static
+SYSTEMD_BOOTPROTO=static
+DISABLED=no
+NM_CONTROLLED=no
+SYSTEMD_CONTROLLED=no
+EOF
 
-# NAT наружу
-iptables -t nat -A POSTROUTING -o "$ISP_EXT_IF" -s 172.16.1.0/28 -j MASQUERADE
-iptables -t nat -A POSTROUTING -o "$ISP_EXT_IF" -s 172.16.2.0/28 -j MASQUERADE
+echo '172.16.1.1/28' > /etc/net/ifaces/enp0s8/ipv4address
+```
+
+### Интерфейс ISP в сторону BR-RTR
+
+```bash
+mkdir -p /etc/net/ifaces/enp0s9
+cat > /etc/net/ifaces/enp0s9/options << 'EOF'
+TYPE=eth
+CONFIG_IPV4=yes
+BOOTPROTO=static
+SYSTEMD_BOOTPROTO=static
+DISABLED=no
+NM_CONTROLLED=no
+SYSTEMD_CONTROLLED=no
+EOF
+
+echo '172.16.2.1/28' > /etc/net/ifaces/enp0s9/ipv4address
+```
+
+### Включить маршрутизацию на ISP
+
+```bash
+sed -i 's/^net.ipv4.ip_forward.*/net.ipv4.ip_forward = 1/' /etc/net/sysctl.conf || echo 'net.ipv4.ip_forward = 1' >> /etc/net/sysctl.conf
+systemctl restart network
+sysctl net.ipv4.ip_forward
+```
+
+### NAT на ISP
+
+```bash
+systemctl enable --now iptables
+iptables -t nat -A POSTROUTING -s 172.16.1.0/28 -o enp0s3 -j MASQUERADE
+iptables -t nat -A POSTROUTING -s 172.16.2.0/28 -o enp0s3 -j MASQUERADE
+iptables-save > /etc/sysconfig/iptables
 ```
 
 Проверка:
 
 ```bash
+ip -br a
 ip route
 iptables -t nat -L -n -v
+systemctl status iptables
 ping -c 3 77.88.8.8
 ```
 
 ---
 
-## 1.3 HQ-RTR: VLAN 120 / 220 / 888
+## 1.3 HQ-RTR на EcoRouter: WAN-порт ge0 в сторону ISP
 
-```bash
-sysctl -w net.ipv4.ip_forward=1
+Сначала создаём IP-интерфейс `ISP`, потом подключаем его к физическому порту `ge0` через untagged service-instance.
 
-ip addr add 172.16.1.2/28 dev "$HQ_WAN_IF"
-ip route add default via 172.16.1.1
+```text
+enable
+configure terminal
+ip route 0.0.0.0/0 172.16.1.1
 
-ip link add link "$HQ_TRUNK_IF" name "$HQ_TRUNK_IF.120" type vlan id 120
-ip link add link "$HQ_TRUNK_IF" name "$HQ_TRUNK_IF.220" type vlan id 220
-ip link add link "$HQ_TRUNK_IF" name "$HQ_TRUNK_IF.888" type vlan id 888
+interface ISP
+ description Connect-to-ISP
+ ip address 172.16.1.2/28
+ exit
 
-ip addr add 192.168.120.1/27 dev "$HQ_TRUNK_IF.120"
-ip addr add 192.168.220.1/27 dev "$HQ_TRUNK_IF.220"
-ip addr add 192.168.88.1/29 dev "$HQ_TRUNK_IF.888"
+port ge0
+ service-instance ge0/ISP
+  encapsulation untagged
+  connect ip interface ISP
+  exit
+ exit
 
-ip link set "$HQ_TRUNK_IF.120" up
-ip link set "$HQ_TRUNK_IF.220" up
-ip link set "$HQ_TRUNK_IF.888" up
+write memory
+```
 
-iptables -t nat -A POSTROUTING -o "$HQ_WAN_IF" -s 192.168.120.0/27 -j MASQUERADE
-iptables -t nat -A POSTROUTING -o "$HQ_WAN_IF" -s 192.168.220.0/27 -j MASQUERADE
-iptables -t nat -A POSTROUTING -o "$HQ_WAN_IF" -s 192.168.88.0/29 -j MASQUERADE
+Проверка:
+
+```text
+show port brief
+show ip interface brief
+show ip route
+ping 172.16.1.1
 ```
 
 ---
 
-## 1.4 BR-RTR: LAN и NAT
+## 1.4 HQ-RTR на EcoRouter: VLAN 120 / 220 / 888 на trunk-порту ge1
 
-```bash
-sysctl -w net.ipv4.ip_forward=1
+На HQ-RTR нужно реализовать маршрутизацию нескольких VLAN через один порт. В типовом задании это называется «router-on-a-stick»: один физический порт несёт tagged VLAN-трафик.
 
-ip addr add 172.16.2.2/28 dev "$BR_WAN_IF"
-ip addr add 192.168.30.1/28 dev "$BR_LAN_IF"
-ip route add default via 172.16.2.1
+### Создать IP-интерфейсы VLAN
 
-ip link set "$BR_WAN_IF" up
-ip link set "$BR_LAN_IF" up
+```text
+configure terminal
 
-iptables -t nat -A POSTROUTING -o "$BR_WAN_IF" -s 192.168.30.0/28 -j MASQUERADE
+interface VLAN120
+ description HQ-SRV
+ ip address 192.168.120.1/27
+ exit
+
+interface VLAN220
+ description HQ-CLI
+ ip address 192.168.220.1/27
+ exit
+
+interface VLAN888
+ description MGMT
+ ip address 192.168.88.1/29
+ exit
+```
+
+### Подключить VLAN к порту ge1
+
+```text
+port ge1
+ service-instance ge1/VLAN120
+  encapsulation dot1q 120 exact
+  rewrite pop 1
+  connect ip interface VLAN120
+  exit
+
+ service-instance ge1/VLAN220
+  encapsulation dot1q 220 exact
+  rewrite pop 1
+  connect ip interface VLAN220
+  exit
+
+ service-instance ge1/VLAN888
+  encapsulation dot1q 888 exact
+  rewrite pop 1
+  connect ip interface VLAN888
+  exit
+ exit
+
+write memory
+```
+
+Что здесь происходит:
+
+| Команда | Зачем нужна |
+|---|---|
+| `port ge1` | выбираем физический порт trunk |
+| `service-instance ge1/VLAN120` | создаём обработчик трафика VLAN120 на этом порту |
+| `encapsulation dot1q 120 exact` | принимать только кадры с тегом VLAN 120 |
+| `rewrite pop 1` | снять VLAN-тег перед передачей в IP-интерфейс |
+| `connect ip interface VLAN120` | связать service-instance с L3-интерфейсом |
+
+Проверка:
+
+```text
+show port brief
+show ip interface brief
+show running-config | include VLAN120
+show running-config | include dot1q
 ```
 
 ---
 
-## 1.5 GRE между HQ-RTR и BR-RTR
+## 1.5 BR-RTR на EcoRouter: WAN ge0 и LOCAL ge1
 
-На HQ-RTR:
+```text
+enable
+configure terminal
+ip route 0.0.0.0/0 172.16.2.1
 
-```bash
-ip tunnel add gre1 mode gre local 172.16.1.2 remote 172.16.2.2 ttl 255
-ip addr add 10.10.10.1/30 dev gre1
-ip link set gre1 up
+interface ISP
+ description Connect-to-ISP
+ ip address 172.16.2.2/28
+ exit
+
+port ge0
+ service-instance ge0/ISP
+  encapsulation untagged
+  connect ip interface ISP
+  exit
+ exit
+
+interface LOCAL
+ description BR-SRV-LAN
+ ip address 192.168.30.1/28
+ exit
+
+port ge1
+ service-instance ge1/LOCAL
+  encapsulation untagged
+  connect ip interface LOCAL
+  exit
+ exit
+
+write memory
 ```
 
-На BR-RTR:
+Проверка:
+
+```text
+show port brief
+show ip interface brief
+show ip route
+ping 172.16.2.1
+```
+
+---
+
+## 1.6 HQ-SRV на ALT: статический IP через `/etc/net/ifaces`
 
 ```bash
-ip tunnel add gre1 mode gre local 172.16.2.2 remote 172.16.1.2 ttl 255
-ip addr add 10.10.10.2/30 dev gre1
-ip link set gre1 up
+mkdir -p /etc/net/ifaces/enp0s3
+cat > /etc/net/ifaces/enp0s3/options << 'EOF'
+TYPE=eth
+DISABLED=no
+BOOTPROTO=static
+SYSTEMD_BOOTPROTO=static
+CONFIG_IPV4=yes
+SYSTEMD_CONTROLLED=no
+NM_CONTROLLED=no
+EOF
+
+echo '192.168.120.2/27' > /etc/net/ifaces/enp0s3/ipv4address
+echo 'default via 192.168.120.1' > /etc/net/ifaces/enp0s3/ipv4route
+echo 'nameserver 77.88.8.8' > /etc/net/ifaces/enp0s3/resolv.conf
+systemctl restart network
 ```
 
 Проверка:
 
 ```bash
-ping -c 3 10.10.10.1
-ping -c 3 10.10.10.2
-ip tunnel show
+ip -br a
+ip route
+cat /etc/resolv.conf
+ping -c 3 192.168.120.1
 ```
 
 ---
 
-## 1.6 OSPF через FRR
-
-На HQ-RTR и BR-RTR:
+## 1.7 BR-SRV на ALT: статический IP через `/etc/net/ifaces`
 
 ```bash
-apt update
-apt install -y frr
-sed -i 's/ospfd=no/ospfd=yes/' /etc/frr/daemons
-systemctl enable --now frr
+mkdir -p /etc/net/ifaces/enp0s3
+cat > /etc/net/ifaces/enp0s3/options << 'EOF'
+TYPE=eth
+DISABLED=no
+BOOTPROTO=static
+SYSTEMD_BOOTPROTO=static
+CONFIG_IPV4=yes
+SYSTEMD_CONTROLLED=no
+NM_CONTROLLED=no
+EOF
+
+echo '192.168.30.2/28' > /etc/net/ifaces/enp0s3/ipv4address
+echo 'default via 192.168.30.1' > /etc/net/ifaces/enp0s3/ipv4route
+echo 'nameserver 192.168.120.2' > /etc/net/ifaces/enp0s3/resolv.conf
+systemctl restart network
 ```
 
-HQ-RTR:
+Проверка:
 
 ```bash
-vtysh
+ip -br a
+ip route
+ping -c 3 192.168.30.1
+```
+
+---
+
+## 1.8 Локальные пользователи
+
+На HQ-SRV и BR-SRV:
+
+```bash
+useradd -m -u 2026 -s /bin/bash sshuser
+passwd sshuser
+usermod -aG wheel sshuser
+echo 'sshuser ALL=(ALL:ALL) NOPASSWD: ALL' > /etc/sudoers.d/sshuser
+chmod 0440 /etc/sudoers.d/sshuser
+```
+
+На EcoRouter:
+
+```text
 configure terminal
-router ospf
+username net_admin
+ password CHANGE_ME_FROM_TASK
+ role admin
+ exit
+write memory
+```
+
+Проверка Linux:
+
+```bash
+id sshuser
+sudo -l -U sshuser
+```
+
+---
+
+## 1.9 SSH: порт, пользователь, баннер, MaxAuthTries
+
+На HQ-SRV и BR-SRV:
+
+```bash
+apt-get update
+apt-get install -y openssh-server
+```
+
+Файл SSH может называться по-разному:
+
+| ОС | Путь |
+|---|---|
+| Debian/Ubuntu | `/etc/ssh/sshd_config` |
+| ALT в некоторых сборках | `/etc/openssh/sshd_config` |
+
+Пример настройки:
+
+```bash
+SSHD_CONFIG='/etc/ssh/sshd_config'
+[ -f /etc/openssh/sshd_config ] && SSHD_CONFIG='/etc/openssh/sshd_config'
+
+sed -i 's/^#*Port .*/Port 2026/' "$SSHD_CONFIG"
+sed -i 's/^#*MaxAuthTries .*/MaxAuthTries 2/' "$SSHD_CONFIG"
+grep -q '^AllowUsers' "$SSHD_CONFIG" && sed -i 's/^AllowUsers.*/AllowUsers sshuser/' "$SSHD_CONFIG" || echo 'AllowUsers sshuser' >> "$SSHD_CONFIG"
+grep -q '^Banner' "$SSHD_CONFIG" && sed -i 's|^Banner.*|Banner /etc/openssh/banner|' "$SSHD_CONFIG" || echo 'Banner /etc/openssh/banner' >> "$SSHD_CONFIG"
+
+mkdir -p /etc/openssh
+echo 'Authorized access only' > /etc/openssh/banner
+systemctl restart sshd || systemctl restart ssh
+```
+
+Проверка:
+
+```bash
+ss -tulpn | grep 2026
+systemctl status sshd || systemctl status ssh
+```
+
+---
+
+## 1.10 GRE-туннель на EcoRouter
+
+### HQ-RTR
+
+```text
+configure terminal
+interface tunnel.1
+ description HQ-to-BR
+ ip address 10.10.10.1/30
+ ip tunnel 172.16.1.2 172.16.2.2 mode gre
+ exit
+write memory
+```
+
+### BR-RTR
+
+```text
+configure terminal
+interface tunnel.1
+ description BR-to-HQ
+ ip address 10.10.10.2/30
+ ip tunnel 172.16.2.2 172.16.1.2 mode gre
+ exit
+write memory
+```
+
+Проверка:
+
+```text
+show ip interface brief
+show interface tunnel.1
+ping 10.10.10.1
+ping 10.10.10.2
+```
+
+---
+
+## 1.11 OSPF на EcoRouter только через tunnel.1
+
+### HQ-RTR
+
+```text
+configure terminal
+router ospf 1
+ ospf router-id 1.1.1.1
  passive-interface default
- no passive-interface gre1
+ no passive-interface tunnel.1
  network 10.10.10.0/30 area 0
  network 192.168.120.0/27 area 0
  network 192.168.220.0/27 area 0
  network 192.168.88.0/29 area 0
-exit
+ exit
+
+interface tunnel.1
+ ip ospf authentication message-digest
+ ip ospf message-digest-key 1 md5 CHANGE_ME_FROM_TASK
+ exit
 write memory
 ```
 
-BR-RTR:
+### BR-RTR
 
-```bash
-vtysh
+```text
 configure terminal
-router ospf
+router ospf 1
+ ospf router-id 2.2.2.2
  passive-interface default
- no passive-interface gre1
+ no passive-interface tunnel.1
  network 10.10.10.0/30 area 0
  network 192.168.30.0/28 area 0
-exit
+ exit
+
+interface tunnel.1
+ ip ospf authentication message-digest
+ ip ospf message-digest-key 1 md5 CHANGE_ME_FROM_TASK
+ exit
 write memory
 ```
 
 Проверка:
 
-```bash
-vtysh -c "show ip ospf neighbor"
-vtysh -c "show ip route ospf"
+```text
+show ip ospf neighbor
+show ip route ospf
+show ip ospf interface tunnel.1
 ```
 
 ---
 
-## 1.7 DHCP для HQ-CLI
+## 1.12 NAT на HQ-RTR и BR-RTR через EcoRouter
 
-На HQ-RTR:
-
-```bash
-apt update
-apt install -y isc-dhcp-server
-```
-
-Пример `/etc/dhcp/dhcpd.conf`:
-
-```conf
-option domain-name "au-team.irpo";
-option domain-name-servers 192.168.120.2;
-default-lease-time 600;
-max-lease-time 7200;
-authoritative;
-
-subnet 192.168.220.0 netmask 255.255.255.224 {
-  range 192.168.220.10 192.168.220.30;
-  option routers 192.168.220.1;
-  option broadcast-address 192.168.220.31;
-}
-```
-
-В `/etc/default/isc-dhcp-server`:
-
-```conf
-INTERFACESv4="enp0s8.220"
-```
-
-Запуск:
-
-```bash
-dhcpd -t -cf /etc/dhcp/dhcpd.conf
-systemctl enable --now isc-dhcp-server
-```
-
----
-
-## 1.8 HQ-SRV: IP, SSH и DNS
-
-```bash
-ip addr add 192.168.120.2/27 dev "$SRV_IF"
-ip route add default via 192.168.120.1
-
-apt update
-apt install -y openssh-server bind9 bind9-utils
-
-useradd -m -u 2026 -s /bin/bash sshuser
-passwd sshuser
-usermod -aG sudo sshuser
-```
-
-SSH-настройки в `/etc/ssh/sshd_config`:
-
-```conf
-Port 2026
-AllowUsers sshuser
-MaxAuthTries 2
-Banner /etc/ssh/banner
-```
-
-```bash
-echo "Authorized access only" > /etc/ssh/banner
-systemctl restart ssh
-```
-
-DNS-зона `au-team.irpo` должна содержать записи:
+### HQ-RTR
 
 ```text
-hq-rtr  A 192.168.120.1
-hq-srv  A 192.168.120.2
-hq-cli  A 192.168.220.10
-br-rtr  A 192.168.30.1
-br-srv  A 192.168.30.2
-web     A 172.16.1.1
-docker  A 172.16.2.1
-mon     A 192.168.120.2
+configure terminal
+interface ISP
+ ip nat outside
+ exit
+
+interface VLAN120
+ ip nat inside
+ exit
+
+interface VLAN220
+ ip nat inside
+ exit
+
+interface VLAN888
+ ip nat inside
+ exit
+
+ip nat pool HQ-SRV 192.168.120.1-192.168.120.30
+ip nat pool HQ-CLI 192.168.220.1-192.168.220.30
+ip nat pool HQ-MGMT 192.168.88.1-192.168.88.6
+
+ip nat source dynamic inside-to-outside pool HQ-SRV overload interface ISP
+ip nat source dynamic inside-to-outside pool HQ-CLI overload interface ISP
+ip nat source dynamic inside-to-outside pool HQ-MGMT overload interface ISP
+write memory
+```
+
+### BR-RTR
+
+```text
+configure terminal
+interface ISP
+ ip nat outside
+ exit
+
+interface LOCAL
+ ip nat inside
+ exit
+
+ip nat pool BR-NET 192.168.30.1-192.168.30.14
+ip nat source dynamic inside-to-outside pool BR-NET overload interface ISP
+write memory
+```
+
+Проверка:
+
+```text
+show ip nat translations
+show running-config | include nat
 ```
 
 ---
 
-## 1.9 BR-SRV: IP и SSH
+## 1.13 DHCP на HQ-RTR для VLAN 220
+
+```text
+configure terminal
+ip pool VLAN220 192.168.220.10-192.168.220.30
+
+dhcp-server 1
+ pool VLAN220 1
+  mask 27
+  gateway 192.168.220.1
+  dns 192.168.120.2
+  domain-name au-team.irpo
+  exit
+ exit
+
+interface VLAN220
+ dhcp-server 1
+ exit
+write memory
+```
+
+Проверка на HQ-RTR:
+
+```text
+show running-config | include dhcp
+show dhcp-server clients VLAN220
+```
+
+Проверка на HQ-CLI:
 
 ```bash
-ip addr add 192.168.30.2/28 dev "$SRV_IF"
-ip route add default via 192.168.30.1
-
-apt update
-apt install -y openssh-server
-
-useradd -m -u 2026 -s /bin/bash sshuser
-passwd sshuser
-usermod -aG sudo sshuser
+ip -br a
+ip route
+cat /etc/resolv.conf
+ping -c 3 192.168.220.1
+ping -c 3 192.168.120.2
 ```
 
 ---
 
-## 1.10 Проверки Модуля 1
+## 1.14 DNS на HQ-SRV
+
+Установить BIND:
 
 ```bash
+apt-get update
+apt-get install -y bind bind-utils || apt-get install -y bind9 bind9-utils
+```
+
+Прямая зона `au-team.irpo` должна содержать:
+
+```zone
+$TTL 1D
+@       IN SOA  hq-srv.au-team.irpo. root.au-team.irpo. (
+        2026060401 ; serial
+        12H        ; refresh
+        1H         ; retry
+        1W         ; expire
+        1H )       ; negative cache
+
+        IN NS   hq-srv.au-team.irpo.
+
+hq-rtr  IN A    192.168.120.1
+hq-srv  IN A    192.168.120.2
+hq-cli  IN A    192.168.220.10
+br-rtr  IN A    192.168.30.1
+br-srv  IN A    192.168.30.2
+web     IN A    172.16.1.1
+docker  IN A    172.16.2.1
+mon     IN A    192.168.120.2
+```
+
+Обратные зоны минимум для HQ-SRV/HQ-CLI:
+
+```zone
+; 120.168.192.in-addr.arpa
+1 IN PTR hq-rtr.au-team.irpo.
+2 IN PTR hq-srv.au-team.irpo.
+```
+
+```zone
+; 220.168.192.in-addr.arpa
+1  IN PTR hq-rtr.au-team.irpo.
+10 IN PTR hq-cli.au-team.irpo.
+```
+
+Проверка:
+
+```bash
+named-checkconf
+named-checkconf -z
+systemctl restart bind || systemctl restart bind9
+host hq-srv.au-team.irpo 127.0.0.1
+host web.au-team.irpo 127.0.0.1
+host docker.au-team.irpo 127.0.0.1
+```
+
+---
+
+## 1.15 Часовой пояс
+
+На ALT/Linux:
+
+```bash
+timedatectl set-timezone Europe/Moscow
+timedatectl
+```
+
+На EcoRouter:
+
+```text
+configure terminal
+ntp timezone utc+3
+write memory
+show ntp timezone
+```
+
+---
+
+## 1.16 Итоговые проверки Модуля 1
+
+### ISP
+
+```bash
+ip -br a
+ip route
+iptables -t nat -L -n -v
+ping -c 3 172.16.1.2
+ping -c 3 172.16.2.2
+```
+
+### HQ-RTR
+
+```text
+show port brief
+show ip interface brief
+show ip route
+show ip ospf neighbor
+show ip nat translations
+ping 172.16.1.1
+ping 10.10.10.2
+ping 192.168.30.2
+```
+
+### BR-RTR
+
+```text
+show port brief
+show ip interface brief
+show ip route
+show ip ospf neighbor
+show ip nat translations
+ping 172.16.2.1
+ping 10.10.10.1
+ping 192.168.120.2
+```
+
+### HQ-SRV
+
+```bash
+hostname -f
+ip -br a
+ip route
+ss -tulpn | grep 2026
+host hq-srv.au-team.irpo 127.0.0.1
+host web.au-team.irpo 127.0.0.1
 ping -c 3 192.168.120.1
+ping -c 3 192.168.30.2
+```
+
+### HQ-CLI
+
+```bash
+ip -br a
+ip route
+cat /etc/resolv.conf
+ping -c 3 192.168.220.1
 ping -c 3 192.168.120.2
 ping -c 3 192.168.30.2
-ping -c 3 10.10.10.1
-ping -c 3 10.10.10.2
-ping -c 3 77.88.8.8
-host hq-srv.au-team.irpo 192.168.120.2
-host web.au-team.irpo 192.168.120.2
-host docker.au-team.irpo 192.168.120.2
 ```
 
 ---
@@ -519,14 +986,7 @@ samba-tool group listmembers hq
 lsblk
 ```
 
-В реальном варианте проверь:
-
-- сколько дисков;
-- какой RAID нужен;
-- как называются диски;
-- есть ли на них данные.
-
-После подготовки массива создаётся точка монтирования:
+Проверь уровень RAID, количество дисков и их имена. После подготовки массива:
 
 ```bash
 mkdir -p /raid/nfs
@@ -544,13 +1004,7 @@ apt install -y nfs-kernel-server
 ```bash
 exportfs -ra
 systemctl enable --now nfs-server
-```
-
-Проверка:
-
-```bash
 exportfs -v
-systemctl status nfs-server
 ```
 
 ---
@@ -563,8 +1017,6 @@ systemctl status nfs-server
 apt update
 apt install -y chrony
 ```
-
-В `chrony.conf` указывается внешний источник времени и разрешаются офисные сети.
 
 На клиентах:
 
@@ -640,21 +1092,12 @@ systemctl enable --now apache2 mariadb
 
 ## 2.7 Port forwarding на маршрутизаторах
 
-Логика:
-
 | Где | Внешний порт | Внутренний узел |
 |---|---:|---|
 | HQ-RTR | 8080 | `192.168.120.2:80` |
 | HQ-RTR | 2026 | `192.168.120.2:2026` |
 | BR-RTR | 8080 | `192.168.30.2:8080` |
 | BR-RTR | 2026 | `192.168.30.2:2026` |
-
-После настройки проверять с ISP/HQ-CLI:
-
-```bash
-curl http://172.16.1.2:8080
-curl http://172.16.2.2:8080
-```
 
 ---
 
@@ -709,22 +1152,14 @@ web.au-team.irpo
 docker.au-team.irpo
 ```
 
-Общий порядок:
+Порядок:
 
 1. Создать CA.
 2. Создать сертификаты web/docker.
 3. Перенести сертификаты на ISP.
 4. Настроить nginx на HTTPS.
 5. Импортировать CA на HQ-CLI.
-6. Проверить, что браузер не ругается.
-
-Проверки:
-
-```bash
-curl -I https://web.au-team.irpo
-curl -I https://docker.au-team.irpo
-openssl x509 -in ca.crt -noout -text
-```
+6. Проверить отсутствие предупреждений браузера.
 
 ---
 
@@ -735,8 +1170,6 @@ openssl x509 -in ca.crt -noout -text
 - IPsec поверх WAN;
 - GRE over IPsec;
 - другой вариант, если он разрешён заданием.
-
-Цель: после включения защиты OSPF должен снова подняться через туннель.
 
 Проверки:
 
@@ -762,13 +1195,6 @@ vtysh -c "show ip ospf neighbor"
 - GRE/IPsec, если используется.
 
 Остальной входящий трафик из внешней сети во внутреннюю сеть должен быть запрещён.
-
-Проверка:
-
-```bash
-iptables -L -n -v
-iptables -t nat -L -n -v
-```
 
 ---
 
@@ -840,12 +1266,6 @@ http://mon.au-team.irpo
 - HQ-SRV;
 - BR-SRV.
 
-Проверка:
-
-```bash
-curl http://mon.au-team.irpo
-```
-
 ---
 
 ## 3.7 Fail2ban
@@ -865,40 +1285,7 @@ fail2ban-client status sshd
 
 ---
 
-## 3.8 Ansible inventory report
-
-На BR-SRV playbook должен собрать информацию о HQ-SRV и HQ-CLI:
-
-- hostname;
-- IP-address;
-- сохранить отчёты в `/etc/ansible/PC-INFO/`.
-
-Проверка:
-
-```bash
-ls -la /etc/ansible/PC-INFO
-```
-
----
-
-## 3.9 Backup
-
-Если в задании требуется резервное копирование:
-
-- определить, что именно копировать;
-- где хранить;
-- чем восстанавливать;
-- сделать тест восстановления.
-
-Минимальная проверка:
-
-```bash
-ls -la /backup
-```
-
----
-
-## 3.10 Проверки Модуля 3
+## 3.8 Проверки Модуля 3
 
 ```bash
 curl -I https://web.au-team.irpo
@@ -937,28 +1324,11 @@ curl -I https://docker.au-team.irpo
 
 ---
 
-# Структура репозитория
+# Источники и адаптация
 
-```text
-.
-├── README.md
-├── TABLES.md
-├── COMMAND_INDEX.md
-├── DISCLAIMER.md
-├── LICENSE.md
-├── LOCAL_SETUP.md
-├── docs/
-├── prompts/
-├── scripts/
-├── module-1/
-├── module-2/
-├── module-3/
-└── appendices/
-```
+Логика Модуля 1 адаптирована под VLAN `120/220/888` на основе типового порядка задания: hostname, IPv4, настройка ISP, пользователи, коммутация HQ через service-instance, SSH, GRE, OSPF, NAT, DHCP, DNS и часовой пояс.
 
----
-
-# Дополнительные файлы
+Дополнительные файлы:
 
 - [`TABLES.md`](./TABLES.md) — таблицы адресации.
 - [`COMMAND_INDEX.md`](./COMMAND_INDEX.md) — индекс команд.
@@ -967,9 +1337,3 @@ curl -I https://docker.au-team.irpo
 - [`prompts/ip-calc-prompt.md`](./prompts/ip-calc-prompt.md) — промт для расчёта IP.
 - [`scripts/calc_subnets.py`](./scripts/calc_subnets.py) — проверка подсетей.
 - [`DISCLAIMER.md`](./DISCLAIMER.md) — ограничения.
-
----
-
-# Правовой статус
-
-Материал предназначен для обучения. Это не официальный экзаменационный пакет и не гарантированный ответ на реальный ДЭ. Все параметры нужно сверять со своим вариантом задания.
