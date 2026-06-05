@@ -1,4 +1,4 @@
-
+wget -O 1.txt "https://raw.githubusercontent.com/0902066/111/main/1.txt"
 
 ![ДЭ-2026](https://img.shields.io/badge/ДЭ-2026-blue)
 ![Домен](https://img.shields.io/badge/domain-au--team.irpo-success)
