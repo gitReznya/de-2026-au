@@ -1,0 +1,2902 @@
+
+GitHub raw-ссылка:
+
+  wget -O de.txt https://raw.githubusercontent.com/USERNAME/REPO/main/de_09_02_06_2026_solution.txt
+
+GitLab raw-ссылка:
+
+  wget -O de.txt https://gitlab.com/USERNAME/REPO/-/raw/main/de_09_02_06_2026_solution.txt
+
+Открыть файл:
+
+  less -S de.txt
+  nano de.txt
+  grep -n "M1-07" de.txt
+
+Быстрый поиск по разделам:
+
+  grep -n "M1-" de.txt      # модуль 1
+  grep -n "M2-" de.txt      # модуль 2
+  grep -n "M3-" de.txt      # модуль 3
+  grep -n "ПРОВЕРКА" de.txt # команды проверки
+
+======================================================================
+0. САМОЕ ВАЖНОЕ ПЕРЕД НАЧАЛОМ
+======================================================================
+
+1) Везде команды выполнять от root, если не указано иначе.
+2) Имена интерфейсов и портов НЕ копировать вслепую. Сначала посмотреть:
+
+   Linux/ALT:
+     ip -br a
+     ip r
+     lsblk
+     nmcli dev 2>/dev/null || true
+
+   EcoRouter:
+     enable
+     show port brief
+     show ip interface brief
+     show running-config
+
+3) В этом файле есть шаблоны. Их нужно заменить под стенд:
+
+   IF_INET   = интерфейс ISP в сторону магистрального провайдера/Интернета, DHCP
+   IF_HQ     = интерфейс ISP в сторону HQ-RTR
+   IF_BR     = интерфейс ISP в сторону BR-RTR
+   IFACE     = нужный интерфейс Linux-машины
+   PORT_ISP  = порт EcoRouter в сторону ISP
+   PORT_HQ   = порт HQ-RTR в сторону HQ-SW, trunk VLAN 100/200/999
+   PORT_FW   = порт BR-RTR в сторону BR-FW
+   SW_RTR    = порт HQ-SW в сторону HQ-RTR
+   SW_SRV    = порт HQ-SW в сторону HQ-SRV
+   SW_CLI    = порт HQ-SW в сторону HQ-CLI
+
+4) После настройки EcoRouter обязательно сохранять:
+
+   write memory
+
+5) После изменения конфигов Linux перезапускать службу:
+
+   systemctl restart network
+   systemctl restart sshd
+   systemctl restart bind
+   systemctl restart chronyd
+   systemctl restart nginx
+
+6) Логика сдачи:
+   - настроил пункт;
+   - проверил пункт;
+   - сделал скрин/записал в отчет;
+   - только потом идешь дальше.
+
+7) Если команда не работает из-за отличия версии ALT/EcoRouter:
+   - не паникуй;
+   - проверь имя пакета/службы;
+   - смотри подсказки: command ?, show ?, systemctl list-units | grep <служба>.
+
+======================================================================
+1. ПРИНЯТАЯ АДРЕСАЦИЯ И ИМЕНА
+======================================================================
+
+Домен: au-team.irpo
+Пароль по заданию: P@ssw0rd
+Пользователь на серверах: sshuser, UID 2026, sudo без пароля
+Пользователь на маршрутизаторах: net_admin, пароль P@ssw0rd
+SSH на серверах: порт 2026, MaxAuthTries 2, Banner Authorized access only
+Часовой пояс: Europe/Moscow
+
+---------------------------------------------------------------------
+1.1. Таблица сетей
+---------------------------------------------------------------------
+
+Сеть/линк                  Адресация             Назначение
+---------------------------------------------------------------------
+ISP-HQ                     172.16.1.0/28         ISP <-> HQ-RTR
+  ISP                      172.16.1.1/28
+  HQ-RTR WAN               172.16.1.2/28
+
+ISP-BR                     172.16.2.0/28         ISP <-> BR-RTR
+  ISP                      172.16.2.1/28
+  BR-RTR WAN               172.16.2.2/28
+
+GRE/IPsec tunnel           10.10.10.0/30         туннель HQ <-> BR
+  HQ-RTR tunnel.1          10.10.10.1/30
+  BR-RTR tunnel.1          10.10.10.2/30
+
+HQ VLAN 100                10.10.100.0/27        сеть HQ-SRV, не более 32 адресов
+  HQ-RTR VLAN100           10.10.100.1/27
+  HQ-SRV                   10.10.100.2/27
+
+HQ VLAN 200                10.10.200.0/28        сеть HQ-CLI, не более 16 адресов
+  HQ-RTR VLAN200           10.10.200.1/28
+  DHCP range               10.10.200.2-10.10.200.14
+  HQ-CLI                   получает по DHCP
+
+HQ VLAN 999                10.10.30.0/29         management, не более 8 адресов
+  HQ-RTR VLAN999           10.10.30.1/29
+  HQ-SW mgmt               10.10.30.2/29
+
+BR-RTR <-> BR-FW           10.20.10.0/30         линк BR-RTR и BR-FW
+  BR-RTR FWNET             10.20.10.1/30
+  BR-FW WAN                10.20.10.2/30
+
+BR-SRV                     10.20.20.0/28         сеть BR-SRV, не более 16 адресов
+  BR-FW LAN-SRV            10.20.20.1/28
+  BR-SRV                   10.20.20.2/28
+
+BR-CLI                     10.20.30.0/29         сеть BR-CLI, не более 8 адресов
+  BR-FW LAN-CLI            10.20.30.1/29
+  BR-CLI                   10.20.30.2/29
+
+---------------------------------------------------------------------
+1.2. FQDN-имена устройств
+---------------------------------------------------------------------
+
+ISP:     isp.au-team.irpo
+HQ-RTR:  hq-rtr.au-team.irpo
+BR-RTR:  br-rtr.au-team.irpo
+HQ-SW:   hq-sw.au-team.irpo
+BR-FW:   br-fw.au-team.irpo
+HQ-SRV:  hq-srv.au-team.irpo
+BR-SRV:  br-srv.au-team.irpo
+HQ-CLI:  hq-cli.au-team.irpo
+BR-CLI:  br-cli.au-team.irpo
+
+---------------------------------------------------------------------
+1.3. DNS-записи, которые должны быть в зоне au-team.irpo
+---------------------------------------------------------------------
+
+hq-rtr.au-team.irpo      A 10.10.100.1
+hq-srv.au-team.irpo      A 10.10.100.2
+hq-cli.au-team.irpo      A 10.10.200.2
+br-rtr.au-team.irpo      A 10.20.10.1
+br-fw.au-team.irpo       A 10.20.10.2
+br-srv.au-team.irpo      A 10.20.20.2
+br-cli.au-team.irpo      A 10.20.30.2
+docker.au-team.irpo      A 172.16.1.1      # ISP интерфейс в сторону HQ-RTR, по таблице задания
+web.au-team.irpo         A 172.16.2.1      # ISP интерфейс в сторону BR-RTR, по таблице задания
+# Оба имени ведут на nginx на ISP; server_name разделяет web и docker.
+mon.au-team.irpo         A 10.10.100.2     # Zabbix доступен только из HQ
+
+Примечание:
+Если проверяющий ожидает web/docker на других адресах, ориентируйся на фактическую схему.
+Главное: web.au-team.irpo должен открыть приложение HQ-SRV через nginx ISP,
+docker.au-team.irpo должен открыть testapp BR-SRV через nginx ISP.
+
+======================================================================
+2. ОБЩИЕ ШАБЛОНЫ КОМАНД
+======================================================================
+
+---------------------------------------------------------------------
+2.1. Linux/ALT: задать hostname
+---------------------------------------------------------------------
+
+hostnamectl set-hostname hq-srv.au-team.irpo
+exec bash
+hostname -f
+
+---------------------------------------------------------------------
+2.2. Linux/ALT: статический IPv4 через etcnet
+---------------------------------------------------------------------
+
+Заменить IFACE, IP/MASK, GW, DNS.
+
+mkdir -p /etc/net/ifaces/IFACE
+cat >/etc/net/ifaces/IFACE/options <<'EOF'
+TYPE=eth
+BOOTPROTO=static
+CONFIG_IPV4=yes
+EOF
+
+cat >/etc/net/ifaces/IFACE/ipv4address <<'EOF'
+IP/MASK
+EOF
+
+cat >/etc/net/ifaces/IFACE/ipv4route <<'EOF'
+default via GW
+EOF
+
+cat >/etc/net/ifaces/IFACE/resolv.conf <<'EOF'
+search au-team.irpo
+nameserver DNS
+EOF
+
+systemctl restart network
+ip -br a
+ip r
+cat /etc/resolv.conf
+
+Пример для HQ-SRV:
+
+hostnamectl set-hostname hq-srv.au-team.irpo
+mkdir -p /etc/net/ifaces/IFACE
+cat >/etc/net/ifaces/IFACE/options <<'EOF'
+TYPE=eth
+BOOTPROTO=static
+CONFIG_IPV4=yes
+EOF
+echo '10.10.100.2/27' >/etc/net/ifaces/IFACE/ipv4address
+echo 'default via 10.10.100.1' >/etc/net/ifaces/IFACE/ipv4route
+cat >/etc/net/ifaces/IFACE/resolv.conf <<'EOF'
+search au-team.irpo
+nameserver 10.10.100.2
+EOF
+systemctl restart network
+
+---------------------------------------------------------------------
+2.3. Linux/ALT: включить маршрутизацию IPv4
+---------------------------------------------------------------------
+
+cat >/etc/sysctl.d/99-forward.conf <<'EOF'
+net.ipv4.ip_forward = 1
+EOF
+sysctl -p /etc/sysctl.d/99-forward.conf
+cat /proc/sys/net/ipv4/ip_forward
+
+---------------------------------------------------------------------
+2.4. Linux/ALT: быстрый NAT через iptables
+---------------------------------------------------------------------
+
+Заменить IF_INET на внешний интерфейс.
+
+iptables -t nat -A POSTROUTING -o IF_INET -j MASQUERADE
+iptables-save >/etc/sysconfig/iptables
+systemctl enable --now iptables
+iptables -t nat -L -n -v
+
+---------------------------------------------------------------------
+2.5. EcoRouter: базовый вход в настройку
+---------------------------------------------------------------------
+
+enable
+configure terminal
+
+Посмотреть порты:
+
+show port brief
+show ip interface brief
+
+Создать L3-интерфейс и привязать его к физическому порту без VLAN:
+
+interface WAN
+ ip address 172.16.1.2/28
+exit
+port PORT_ISP
+ service-instance SI_WAN
+  encapsulation untagged
+  connect ip interface WAN
+ exit
+exit
+
+Создать L3-интерфейс и привязать его к trunk VLAN:
+
+interface VLAN100
+ ip address 10.10.100.1/27
+exit
+port PORT_HQ
+ service-instance SI100
+  encapsulation dot1q 100
+  rewrite pop 1
+  connect ip interface VLAN100
+ exit
+exit
+
+Маршрут по умолчанию:
+
+ip route 0.0.0.0/0 172.16.1.1
+
+Сохранить:
+
+write memory
+
+Проверить:
+
+show ip interface brief
+show ip route
+show running-config
+
+======================================================================
+M1. МОДУЛЬ 1 — НАСТРОЙКА СЕТЕВОЙ ИНФРАСТРУКТУРЫ
+======================================================================
+
+Цель модуля:
+- настроить имена;
+- рассчитать и назначить IP;
+- настроить VLAN/маршрутизацию;
+- настроить SSH;
+- настроить GRE;
+- настроить OSPF с MD5;
+- настроить NAT;
+- настроить DHCP;
+- настроить DNS;
+- настроить время.
+
+---------------------------------------------------------------------
+M1-01. Заполнить адресный план для отчета
+---------------------------------------------------------------------
+
+В отчет вставить таблицу из раздела 1.1.
+Важное объяснение:
+
+VLAN100: 10.10.100.0/27 = 32 адреса, подходит под «не более 32».
+VLAN200: 10.10.200.0/28 = 16 адресов, подходит под «не более 16».
+VLAN999: 10.10.30.0/29  = 8 адресов, подходит под «не более 8».
+BR-SRV:  10.20.20.0/28  = 16 адресов, подходит под «не более 16».
+BR-CLI:  10.20.30.0/29  = 8 адресов, подходит под «не более 8».
+GRE:     10.10.10.0/30  = минимальная маска для 2 адресов туннеля.
+
+---------------------------------------------------------------------
+M1-02. Настройка ISP
+---------------------------------------------------------------------
+
+Где выполнять: ISP, Linux/ALT/JeOS.
+Что сделать:
+- имя isp.au-team.irpo;
+- внешний интерфейс к провайдеру получает IP по DHCP;
+- интерфейс к HQ-RTR: 172.16.1.1/28;
+- интерфейс к BR-RTR: 172.16.2.1/28;
+- включить ip_forward;
+- включить NAT в сторону внешнего интерфейса.
+
+Команды:
+
+hostnamectl set-hostname isp.au-team.irpo
+exec bash
+
+mkdir -p /etc/net/ifaces/IF_INET /etc/net/ifaces/IF_HQ /etc/net/ifaces/IF_BR
+
+cat >/etc/net/ifaces/IF_INET/options <<'EOF'
+TYPE=eth
+BOOTPROTO=dhcp
+CONFIG_IPV4=yes
+EOF
+
+cat >/etc/net/ifaces/IF_HQ/options <<'EOF'
+TYPE=eth
+BOOTPROTO=static
+CONFIG_IPV4=yes
+EOF
+
+echo '172.16.1.1/28' >/etc/net/ifaces/IF_HQ/ipv4address
+
+cat >/etc/net/ifaces/IF_BR/options <<'EOF'
+TYPE=eth
+BOOTPROTO=static
+CONFIG_IPV4=yes
+EOF
+
+echo '172.16.2.1/28' >/etc/net/ifaces/IF_BR/ipv4address
+
+systemctl restart network
+
+cat >/etc/sysctl.d/99-forward.conf <<'EOF'
+net.ipv4.ip_forward = 1
+EOF
+sysctl -p /etc/sysctl.d/99-forward.conf
+
+iptables -t nat -A POSTROUTING -o IF_INET -j MASQUERADE
+iptables-save >/etc/sysconfig/iptables
+systemctl enable --now iptables
+
+ПРОВЕРКА:
+
+hostname -f
+ip -br a
+ip r
+cat /proc/sys/net/ipv4/ip_forward
+iptables -t nat -L -n -v
+ping -c 2 172.16.1.2   # после настройки HQ-RTR
+ping -c 2 172.16.2.2   # после настройки BR-RTR
+
+---------------------------------------------------------------------
+M1-03. Настройка HQ-RTR: hostname, user, WAN, VLAN 100/200/999
+---------------------------------------------------------------------
+
+Где выполнять: HQ-RTR, EcoRouter.
+Что заменить:
+- PORT_ISP = порт к ISP;
+- PORT_HQ = порт к HQ-SW trunk.
+
+Команды:
+
+enable
+configure terminal
+hostname hq-rtr.au-team.irpo
+username net_admin privilege 15 password P@ssw0rd
+
+interface WAN
+ ip address 172.16.1.2/28
+ ip nat outside
+exit
+port PORT_ISP
+ service-instance SI_WAN
+  encapsulation untagged
+  connect ip interface WAN
+ exit
+exit
+ip route 0.0.0.0/0 172.16.1.1
+
+interface VLAN100
+ ip address 10.10.100.1/27
+ ip nat inside
+exit
+interface VLAN200
+ ip address 10.10.200.1/28
+ ip nat inside
+exit
+interface VLAN999
+ ip address 10.10.30.1/29
+ ip nat inside
+exit
+
+port PORT_HQ
+ service-instance SI100
+  encapsulation dot1q 100
+  rewrite pop 1
+  connect ip interface VLAN100
+ exit
+ service-instance SI200
+  encapsulation dot1q 200
+  rewrite pop 1
+  connect ip interface VLAN200
+ exit
+ service-instance SI999
+  encapsulation dot1q 999
+  rewrite pop 1
+  connect ip interface VLAN999
+ exit
+exit
+
+write memory
+
+ПРОВЕРКА:
+
+show ip interface brief
+show ip route
+ping 172.16.1.1
+
+---------------------------------------------------------------------
+M1-04. Настройка BR-RTR: hostname, user, WAN, линк к BR-FW
+---------------------------------------------------------------------
+
+Где выполнять: BR-RTR, EcoRouter.
+Что заменить:
+- PORT_ISP = порт к ISP;
+- PORT_FW = порт к BR-FW.
+
+Команды:
+
+enable
+configure terminal
+hostname br-rtr.au-team.irpo
+username net_admin privilege 15 password P@ssw0rd
+
+interface WAN
+ ip address 172.16.2.2/28
+ ip nat outside
+exit
+port PORT_ISP
+ service-instance SI_WAN
+  encapsulation untagged
+  connect ip interface WAN
+ exit
+exit
+ip route 0.0.0.0/0 172.16.2.1
+
+interface FWNET
+ ip address 10.20.10.1/30
+ ip nat inside
+exit
+port PORT_FW
+ service-instance SI_FW
+  encapsulation untagged
+  connect ip interface FWNET
+ exit
+exit
+
+write memory
+
+ПРОВЕРКА:
+
+show ip interface brief
+show ip route
+ping 172.16.2.1
+
+---------------------------------------------------------------------
+M1-05. Настройка BR-FW минимально для связности
+---------------------------------------------------------------------
+
+Где выполнять: BR-FW.
+Так как конкретный интерфейс BR-FW зависит от стенда, настрой через GUI/CLI:
+
+WAN / к BR-RTR:
+  IP:      10.20.10.2/30
+  Gateway: 10.20.10.1
+
+LAN к BR-SRV:
+  IP:      10.20.20.1/28
+
+LAN к BR-CLI:
+  IP:      10.20.30.1/29
+
+Маршруты/OSPF:
+  BR-FW должен знать сети HQ через BR-RTR.
+  BR-RTR должен знать сети BR-SRV и BR-CLI через BR-FW.
+  По заданию лучше включить OSPF между BR-RTR и BR-FW.
+
+Если на BR-FW есть OSPF:
+  process/area: 0
+  interface to BR-RTR: 10.20.10.2/30, OSPF enabled
+  networks: 10.20.10.0/30, 10.20.20.0/28, 10.20.30.0/29
+  auth: MD5, key P@ssw0rd, если доступно
+
+Временная проверочная альтернатива, если OSPF на BR-FW не поднялся:
+  На BR-RTR добавить route до BR-LAN через 10.20.10.2.
+  На BR-FW добавить route до HQ-сетей через 10.20.10.1.
+Но в финале по заданию нужен OSPF.
+
+ПРОВЕРКА:
+  BR-FW ping 10.20.10.1
+  BR-SRV ping 10.20.20.1
+  BR-CLI ping 10.20.30.1
+
+---------------------------------------------------------------------
+M1-06. Коммутация HQ: VLAN 100/200/999
+---------------------------------------------------------------------
+
+Нужно:
+- HQ-SRV в VLAN 100;
+- HQ-CLI в VLAN 200;
+- управление в VLAN 999;
+- к HQ-RTR один trunk-порт с VLAN 100, 200, 999.
+
+Вариант А: если HQ-SW — обычный/виртуальный коммутатор с CLI
+---------------------------------------------------------------------
+Логика портов:
+
+SW_RTR -> trunk/tagged VLAN 100,200,999
+SW_SRV -> access/untagged VLAN 100
+SW_CLI -> access/untagged VLAN 200
+MGMT   -> VLAN 999, IP HQ-SW 10.10.30.2/29, GW 10.10.30.1
+
+Команды зависят от коммутатора, но смысл такой:
+
+vlan 100
+ name HQ-SRV
+vlan 200
+ name HQ-CLI
+vlan 999
+ name MGMT
+
+interface SW_SRV
+ switchport mode access
+ switchport access vlan 100
+
+interface SW_CLI
+ switchport mode access
+ switchport access vlan 200
+
+interface SW_RTR
+ switchport mode trunk
+ switchport trunk allowed vlan 100,200,999
+
+interface vlan 999
+ ip address 10.10.30.2/29
+ip default-gateway 10.10.30.1
+
+Вариант Б: если HQ-SW — Linux-машина как программный bridge
+---------------------------------------------------------------------
+Заменить SW_RTR, SW_SRV, SW_CLI на реальные интерфейсы.
+
+hostnamectl set-hostname hq-sw.au-team.irpo
+
+ip link add br0 type bridge vlan_filtering 1
+ip link set br0 up
+
+ip link set SW_RTR up
+ip link set SW_SRV up
+ip link set SW_CLI up
+
+ip link set SW_RTR master br0
+ip link set SW_SRV master br0
+ip link set SW_CLI master br0
+
+bridge vlan del dev SW_RTR vid 1 2>/dev/null || true
+bridge vlan del dev SW_SRV vid 1 2>/dev/null || true
+bridge vlan del dev SW_CLI vid 1 2>/dev/null || true
+bridge vlan del dev br0 self vid 1 2>/dev/null || true
+
+# trunk к роутеру: VLAN 100/200/999 tagged
+bridge vlan add dev SW_RTR vid 100
+bridge vlan add dev SW_RTR vid 200
+bridge vlan add dev SW_RTR vid 999
+
+# access к HQ-SRV: VLAN 100 untagged
+bridge vlan add dev SW_SRV vid 100 pvid untagged
+
+# access к HQ-CLI: VLAN 200 untagged
+bridge vlan add dev SW_CLI vid 200 pvid untagged
+
+# management IP коммутатора в VLAN 999
+ip link add link br0 name br0.999 type vlan id 999
+ip addr add 10.10.30.2/29 dev br0.999
+ip link set br0.999 up
+ip route add default via 10.10.30.1
+
+ПРОВЕРКА:
+
+bridge vlan show
+ip -br a
+ping -c 2 10.10.30.1
+
+---------------------------------------------------------------------
+M1-07. HQ-SRV: hostname, IP, SSH-user, SSH hardening
+---------------------------------------------------------------------
+
+Где выполнять: HQ-SRV.
+IP: 10.10.100.2/27
+GW: 10.10.100.1
+DNS: временно 77.88.8.8, после настройки bind можно 127.0.0.1/10.10.100.2.
+
+Команды:
+
+hostnamectl set-hostname hq-srv.au-team.irpo
+exec bash
+
+mkdir -p /etc/net/ifaces/IFACE
+cat >/etc/net/ifaces/IFACE/options <<'EOF'
+TYPE=eth
+BOOTPROTO=static
+CONFIG_IPV4=yes
+EOF
+echo '10.10.100.2/27' >/etc/net/ifaces/IFACE/ipv4address
+echo 'default via 10.10.100.1' >/etc/net/ifaces/IFACE/ipv4route
+cat >/etc/net/ifaces/IFACE/resolv.conf <<'EOF'
+search au-team.irpo
+nameserver 10.10.100.2
+EOF
+systemctl restart network
+
+useradd -u 2026 -m -G wheel sshuser
+printf 'sshuser:P@ssw0rd\n' | chpasswd
+cat >/etc/sudoers.d/sshuser-nopasswd <<'EOF'
+sshuser ALL=(ALL:ALL) NOPASSWD: ALL
+EOF
+chmod 440 /etc/sudoers.d/sshuser-nopasswd
+
+cp /etc/openssh/sshd_config /etc/openssh/sshd_config.bak.$(date +%F_%H%M)
+sed -i '/^Port /d;/^MaxAuthTries /d;/^Banner /d;/^AllowUsers /d;/^PasswordAuthentication /d' /etc/openssh/sshd_config
+cat >>/etc/openssh/sshd_config <<'EOF'
+Port 2026
+MaxAuthTries 2
+Banner /etc/openssh/banner
+AllowUsers sshuser
+PasswordAuthentication yes
+EOF
+echo 'Authorized access only' >/etc/openssh/banner
+systemctl restart sshd
+
+ПРОВЕРКА:
+
+hostname -f
+ip -br a
+ip r
+id sshuser
+sudo -l -U sshuser
+ss -tulpen | grep 2026
+ssh -p 2026 sshuser@127.0.0.1
+
+---------------------------------------------------------------------
+M1-08. BR-SRV: hostname, IP, SSH-user, SSH hardening
+---------------------------------------------------------------------
+
+Где выполнять: BR-SRV.
+IP: 10.20.20.2/28
+GW: 10.20.20.1
+DNS: 10.10.100.2 после настройки туннеля/DNS.
+
+Команды:
+
+hostnamectl set-hostname br-srv.au-team.irpo
+exec bash
+
+mkdir -p /etc/net/ifaces/IFACE
+cat >/etc/net/ifaces/IFACE/options <<'EOF'
+TYPE=eth
+BOOTPROTO=static
+CONFIG_IPV4=yes
+EOF
+echo '10.20.20.2/28' >/etc/net/ifaces/IFACE/ipv4address
+echo 'default via 10.20.20.1' >/etc/net/ifaces/IFACE/ipv4route
+cat >/etc/net/ifaces/IFACE/resolv.conf <<'EOF'
+search au-team.irpo
+nameserver 10.10.100.2
+EOF
+systemctl restart network
+
+useradd -u 2026 -m -G wheel sshuser
+printf 'sshuser:P@ssw0rd\n' | chpasswd
+cat >/etc/sudoers.d/sshuser-nopasswd <<'EOF'
+sshuser ALL=(ALL:ALL) NOPASSWD: ALL
+EOF
+chmod 440 /etc/sudoers.d/sshuser-nopasswd
+
+cp /etc/openssh/sshd_config /etc/openssh/sshd_config.bak.$(date +%F_%H%M)
+sed -i '/^Port /d;/^MaxAuthTries /d;/^Banner /d;/^AllowUsers /d;/^PasswordAuthentication /d' /etc/openssh/sshd_config
+cat >>/etc/openssh/sshd_config <<'EOF'
+Port 2026
+MaxAuthTries 2
+Banner /etc/openssh/banner
+AllowUsers sshuser
+PasswordAuthentication yes
+EOF
+echo 'Authorized access only' >/etc/openssh/banner
+systemctl restart sshd
+
+ПРОВЕРКА:
+
+hostname -f
+ip -br a
+ip r
+id sshuser
+ss -tulpen | grep 2026
+ssh -p 2026 sshuser@127.0.0.1
+
+---------------------------------------------------------------------
+M1-09. GRE-туннель HQ-RTR <-> BR-RTR
+---------------------------------------------------------------------
+
+Сеть туннеля: 10.10.10.0/30
+HQ: 10.10.10.1/30
+BR: 10.10.10.2/30
+
+HQ-RTR:
+
+enable
+configure terminal
+interface tunnel.1
+ ip address 10.10.10.1/30
+ ip tunnel 172.16.1.2 172.16.2.2 mode gre
+exit
+write memory
+
+BR-RTR:
+
+enable
+configure terminal
+interface tunnel.1
+ ip address 10.10.10.2/30
+ ip tunnel 172.16.2.2 172.16.1.2 mode gre
+exit
+write memory
+
+ПРОВЕРКА:
+
+# HQ-RTR
+show interface tunnel.1
+ping 10.10.10.2
+
+# BR-RTR
+show interface tunnel.1
+ping 10.10.10.1
+
+---------------------------------------------------------------------
+M1-10. OSPF с MD5 между HQ-RTR, BR-RTR и BR-FW
+---------------------------------------------------------------------
+
+Важная логика:
+- OSPF должен обмениваться маршрутами через туннель HQ<->BR.
+- На HQ-RTR активным OSPF делаем только tunnel.1.
+- На BR-RTR активным OSPF делаем tunnel.1 и FWNET, чтобы увидеть BR-FW.
+- На BR-FW включаем OSPF к BR-RTR и объявляем BR-LAN сети.
+- Пароль OSPF: P@ssw0rd.
+- Если команда authentification не принимается, попробовать authentication.
+
+HQ-RTR:
+
+enable
+configure terminal
+interface tunnel.1
+ ip ospf authentification-key P@ssw0rd
+exit
+router ospf 1
+ passive-interface default
+ no passive-interface tunnel.1
+ area 0 authentication
+ network 10.10.10.0/30 area 0
+ network 10.10.100.0/27 area 0
+ network 10.10.200.0/28 area 0
+ network 10.10.30.0/29 area 0
+exit
+write memory
+
+BR-RTR:
+
+enable
+configure terminal
+interface tunnel.1
+ ip ospf authentification-key P@ssw0rd
+exit
+interface FWNET
+ ip ospf authentification-key P@ssw0rd
+exit
+router ospf 1
+ passive-interface default
+ no passive-interface tunnel.1
+ no passive-interface FWNET
+ area 0 authentication
+ network 10.10.10.0/30 area 0
+ network 10.20.10.0/30 area 0
+exit
+write memory
+
+BR-FW:
+
+Включить OSPF через GUI/CLI:
+  area 0
+  auth MD5/key P@ssw0rd, если есть
+  interface to BR-RTR = 10.20.10.2/30
+  advertise networks:
+    10.20.10.0/30
+    10.20.20.0/28
+    10.20.30.0/29
+
+ПРОВЕРКА:
+
+# HQ-RTR/BR-RTR
+show ip ospf neighbor
+show ip route ospf
+ping 10.20.20.2      # с HQ-RTR/HQ-SRV до BR-SRV
+ping 10.10.100.2     # с BR-RTR/BR-SRV до HQ-SRV
+
+Если соседства нет:
+1) ping 10.10.10.1/10.10.10.2 по туннелю;
+2) проверить одинаковый area;
+3) проверить одинаковый пароль OSPF;
+4) проверить passive-interface;
+5) проверить firewall, чтобы GRE/OSPF не блокировались.
+
+---------------------------------------------------------------------
+M1-11. Динамический NAT на HQ-RTR и BR-RTR
+---------------------------------------------------------------------
+
+HQ-RTR:
+
+enable
+configure terminal
+interface WAN
+ ip nat outside
+exit
+interface VLAN100
+ ip nat inside
+exit
+interface VLAN200
+ ip nat inside
+exit
+interface VLAN999
+ ip nat inside
+exit
+ip nat pool HQ_POOL 172.16.1.2-172.16.1.2
+ip nat source dynamic inside-to-outside pool HQ_POOL overload interface WAN
+write memory
+
+BR-RTR:
+
+enable
+configure terminal
+interface WAN
+ ip nat outside
+exit
+interface FWNET
+ ip nat inside
+exit
+ip nat pool BR_POOL 172.16.2.2-172.16.2.2
+ip nat source dynamic inside-to-outside pool BR_POOL overload interface WAN
+write memory
+
+ПРОВЕРКА:
+
+# С внутренних машин
+ping 172.16.1.1
+ping 172.16.2.1
+ping 77.88.8.8
+
+# На роутерах
+show ip nat translations
+show running-config | include nat
+
+---------------------------------------------------------------------
+M1-12. DHCP для HQ-CLI на HQ-RTR
+---------------------------------------------------------------------
+
+Сеть HQ-CLI: 10.10.200.0/28
+Шлюз: 10.10.200.1
+DNS: 10.10.100.2
+DNS suffix: au-team.irpo
+Исключить адрес роутера 10.10.200.1.
+Выдавать можно 10.10.200.2-10.10.200.14.
+
+HQ-RTR:
+
+enable
+configure terminal
+ip pool HQCLI 10.10.200.2-10.10.200.14
+dhcp-server 1
+ pool HQCLI 1
+  mask 255.255.255.240
+  gateway 10.10.200.1
+  dns 10.10.100.2
+  domain-name au-team.irpo
+ exit
+exit
+interface VLAN200
+ dhcp-server 1
+exit
+write memory
+
+HQ-CLI:
+
+Настроить интерфейс на DHCP.
+Если ALT/etcnet:
+
+mkdir -p /etc/net/ifaces/IFACE
+cat >/etc/net/ifaces/IFACE/options <<'EOF'
+TYPE=eth
+BOOTPROTO=dhcp
+CONFIG_IPV4=yes
+EOF
+systemctl restart network
+
+ПРОВЕРКА HQ-CLI:
+
+ip -br a
+ip r
+cat /etc/resolv.conf
+ping -c 2 10.10.200.1
+ping -c 2 10.10.100.2
+
+---------------------------------------------------------------------
+M1-13. DNS BIND на HQ-SRV
+---------------------------------------------------------------------
+
+Где выполнять: HQ-SRV.
+Задача:
+- основной DNS на HQ-SRV;
+- прямая зона au-team.irpo;
+- обратные зоны для основных HQ-сетей;
+- forwarders: 77.88.8.8/77.88.8.1 или 77.88.8.7/77.88.8.3.
+
+Команды:
+
+apt-get update
+apt-get install -y bind bind-utils
+
+mkdir -p /var/lib/bind/etc/zone
+
+cat >/var/lib/bind/etc/options.conf <<'EOF'
+options {
+ listen-on { 127.0.0.1; 10.10.100.2; };
+ directory "/etc/bind/zone";
+ forwarders { 77.88.8.8; 77.88.8.1; };
+ allow-query { 127.0.0.1; 10.0.0.0/8; 172.16.0.0/12; };
+ recursion yes;
+};
+EOF
+
+cat >>/var/lib/bind/etc/rfc1912.conf <<'EOF'
+zone "au-team.irpo" { type master; file "au-team.irpo.db"; };
+zone "100.10.10.in-addr.arpa" { type master; file "10.10.100.rev"; };
+zone "200.10.10.in-addr.arpa" { type master; file "10.10.200.rev"; };
+zone "20.20.10.in-addr.arpa"  { type master; file "10.20.20.rev"; };
+zone "30.20.10.in-addr.arpa"  { type master; file "10.20.30.rev"; };
+EOF
+
+cat >/var/lib/bind/etc/zone/au-team.irpo.db <<'EOF'
+$TTL 3600
+@ IN SOA hq-srv.au-team.irpo. admin.au-team.irpo. (1 3600 900 604800 86400)
+@       IN NS hq-srv.au-team.irpo.
+hq-rtr  IN A 10.10.100.1
+hq-srv  IN A 10.10.100.2
+hq-cli  IN A 10.10.200.2
+br-rtr  IN A 10.20.10.1
+br-fw   IN A 10.20.10.2
+br-srv  IN A 10.20.20.2
+br-cli  IN A 10.20.30.2
+docker  IN A 172.16.1.1
+web     IN A 172.16.2.1
+mon     IN A 10.10.100.2
+EOF
+
+cat >/var/lib/bind/etc/zone/10.10.100.rev <<'EOF'
+$TTL 3600
+@ IN SOA hq-srv.au-team.irpo. admin.au-team.irpo. (1 3600 900 604800 86400)
+@ IN NS hq-srv.au-team.irpo.
+1 IN PTR hq-rtr.au-team.irpo.
+2 IN PTR hq-srv.au-team.irpo.
+EOF
+
+cat >/var/lib/bind/etc/zone/10.10.200.rev <<'EOF'
+$TTL 3600
+@ IN SOA hq-srv.au-team.irpo. admin.au-team.irpo. (1 3600 900 604800 86400)
+@ IN NS hq-srv.au-team.irpo.
+2 IN PTR hq-cli.au-team.irpo.
+EOF
+
+cat >/var/lib/bind/etc/zone/10.20.20.rev <<'EOF'
+$TTL 3600
+@ IN SOA hq-srv.au-team.irpo. admin.au-team.irpo. (1 3600 900 604800 86400)
+@ IN NS hq-srv.au-team.irpo.
+2 IN PTR br-srv.au-team.irpo.
+EOF
+
+cat >/var/lib/bind/etc/zone/10.20.30.rev <<'EOF'
+$TTL 3600
+@ IN SOA hq-srv.au-team.irpo. admin.au-team.irpo. (1 3600 900 604800 86400)
+@ IN NS hq-srv.au-team.irpo.
+2 IN PTR br-cli.au-team.irpo.
+EOF
+
+chown -R named:named /var/lib/bind/etc/zone 2>/dev/null || true
+
+named-checkconf -z /var/lib/bind/etc/named.conf || named-checkconf -z
+systemctl enable --now bind
+systemctl restart bind
+
+ПРОВЕРКА:
+
+ss -tulpen | grep ':53'
+host hq-srv.au-team.irpo 127.0.0.1
+host br-srv.au-team.irpo 10.10.100.2
+host 10.10.100.2 10.10.100.2
+host ya.ru 10.10.100.2
+
+Если named-checkconf ругается на путь:
+  проверь /etc/bind/named.conf и /var/lib/bind/etc/named.conf;
+  на ALT bind часто работает в chroot /var/lib/bind.
+
+---------------------------------------------------------------------
+M1-14. Часовой пояс Europe/Moscow
+---------------------------------------------------------------------
+
+Linux/ALT на всех машинах:
+
+timedatectl set-timezone Europe/Moscow
+timedatectl
+
+EcoRouter:
+
+configure terminal
+clock timezone Europe/Moscow
+write memory
+
+Если clock timezone не работает, настрой через доступную команду времени или web/CLI.
+Главное в отчете показать timedatectl/clock и регион Москва.
+
+---------------------------------------------------------------------
+M1-15. Финальная проверка модуля 1
+---------------------------------------------------------------------
+
+HQ-SRV:
+
+hostname -f
+ip -br a
+ip r
+ping -c 2 10.10.100.1
+ping -c 2 10.20.20.2
+host br-srv.au-team.irpo 10.10.100.2
+ssh -p 2026 sshuser@127.0.0.1
+
+HQ-CLI:
+
+ip -br a
+ip r
+cat /etc/resolv.conf
+ping -c 2 10.10.200.1
+ping -c 2 hq-srv.au-team.irpo
+ping -c 2 br-srv.au-team.irpo
+
+BR-SRV:
+
+hostname -f
+ip -br a
+ip r
+ping -c 2 10.20.20.1
+ping -c 2 10.10.100.2
+host hq-srv.au-team.irpo 10.10.100.2
+
+HQ-RTR/BR-RTR:
+
+show ip interface brief
+show ip route
+show interface tunnel.1
+show ip ospf neighbor
+show ip route ospf
+show ip nat translations
+show running-config
+
+======================================================================
+M2. МОДУЛЬ 2 — ОРГАНИЗАЦИЯ СЕТЕВОГО АДМИНИСТРИРОВАНИЯ
+======================================================================
+
+Важно:
+В модуле 2 используется отдельный стенд. По заданию часть сети уже преднастроена:
+IP, NAT, туннель, OSPF, sshuser/net_admin, SSH-порты, DHCP, DNS.
+Не трать время на повторную настройку сети, если она уже готова.
+Сначала проверь связность, потом делай сервисы.
+
+Быстрая стартовая проверка:
+
+ip -br a
+ip r
+hostname -f
+ping -c 2 hq-srv.au-team.irpo
+ping -c 2 br-srv.au-team.irpo
+host hq-srv.au-team.irpo
+ssh -p 2026 sshuser@hq-srv.au-team.irpo
+
+---------------------------------------------------------------------
+M2-01. Samba DC на BR-SRV
+---------------------------------------------------------------------
+
+Где выполнять: BR-SRV.
+Задача:
+- домен au-team.irpo;
+- создать пользователей hquser1-5 и bruser1-5;
+- создать группы hq и br;
+- добавить пользователей в группы;
+- HQ-CLI и BR-CLI ввести в домен;
+- hq могут входить на HQ-CLI;
+- br могут входить на BR-CLI;
+- группа hq может sudo только cat, grep, id.
+
+BR-SRV: установка и provision домена:
+
+apt-get update
+apt-get install -y samba-dc samba-client krb5-workstation bind-utils
+
+systemctl disable --now smb nmb winbind 2>/dev/null || true
+systemctl stop samba 2>/dev/null || true
+rm -f /etc/samba/smb.conf
+
+samba-tool domain provision \
+  --realm=AU-TEAM.IRPO \
+  --domain=AU-TEAM \
+  --server-role=dc \
+  --dns-backend=SAMBA_INTERNAL \
+  --adminpass='P@ssw0rd' \
+  --use-rfc2307
+
+cp /var/lib/samba/private/krb5.conf /etc/krb5.conf
+systemctl enable --now samba
+
+Создание пользователей и групп:
+
+for i in 1 2 3 4 5; do
+  samba-tool user create hquser$i P@ssw0rd
+  samba-tool user create bruser$i P@ssw0rd
+done
+
+samba-tool group add hq
+samba-tool group add br
+samba-tool group addmembers hq hquser1,hquser2,hquser3,hquser4,hquser5
+samba-tool group addmembers br bruser1,bruser2,bruser3,bruser4,bruser5
+
+ПРОВЕРКА на BR-SRV:
+
+samba-tool domain info 127.0.0.1
+samba-tool user list | egrep 'hquser|bruser'
+samba-tool group listmembers hq
+samba-tool group listmembers br
+host -t SRV _ldap._tcp.au-team.irpo 127.0.0.1
+
+Ввод HQ-CLI в домен:
+
+apt-get update
+apt-get install -y realmd adcli sssd krb5-workstation samba-common-tools oddjob oddjob-mkhomedir
+realm discover au-team.irpo
+realm join -U Administrator au-team.irpo
+realm list
+realm permit -g hq
+systemctl restart sssd
+
+Ввод BR-CLI в домен:
+
+apt-get update
+apt-get install -y realmd adcli sssd krb5-workstation samba-common-tools oddjob oddjob-mkhomedir
+realm discover au-team.irpo
+realm join -U Administrator au-team.irpo
+realm list
+realm permit -g br
+systemctl restart sssd
+
+Если realm не найден в ALT:
+  используй alterator-auth / system-auth / task-auth-ad-sssd по методике стенда.
+  Суть: клиент должен стать членом домена AU-TEAM.IRPO и использовать sssd/kerberos.
+
+Ограниченный sudo для группы hq на HQ-CLI:
+
+Вариант 1, если AD-группа видна как hq:
+
+cat >/etc/sudoers.d/hq-limited <<'EOF'
+%hq ALL=(ALL) NOPASSWD: /bin/cat, /bin/grep, /usr/bin/id
+EOF
+chmod 440 /etc/sudoers.d/hq-limited
+visudo -c
+
+Вариант 2, если группа видна как AU-TEAM\hq:
+
+cat >/etc/sudoers.d/hq-limited <<'EOF'
+%AU-TEAM\\hq ALL=(ALL) NOPASSWD: /bin/cat, /bin/grep, /usr/bin/id
+EOF
+chmod 440 /etc/sudoers.d/hq-limited
+visudo -c
+
+ПРОВЕРКА на HQ-CLI:
+
+id hquser1
+su - hquser1
+sudo /usr/bin/id
+sudo /bin/cat /etc/hostname
+sudo /bin/grep root /etc/passwd
+sudo /bin/ls /root       # должно быть запрещено
+
+ПРОВЕРКА на BR-CLI:
+
+id bruser1
+su - bruser1
+
+---------------------------------------------------------------------
+M2-02. RAID0 и NFS на HQ-SRV
+---------------------------------------------------------------------
+
+Где выполнять: HQ-SRV.
+Задача:
+- взять два дополнительных диска по 1 ГБ;
+- создать RAID0 /dev/md0;
+- создать раздел;
+- ext4;
+- монтировать в /raid;
+- NFS export /raid/nfs только для HQ-CLI и BR-CLI;
+- на HQ-CLI и BR-CLI автомонтирование в /mnt/nfs.
+
+HQ-SRV: посмотреть диски:
+
+lsblk
+
+Обычно дополнительные диски: /dev/sdb /dev/sdc /dev/sdd.
+Берем два, например /dev/sdb и /dev/sdc.
+
+HQ-SRV: RAID0:
+
+apt-get update
+apt-get install -y mdadm nfs-server nfs-utils autofs
+
+mdadm --create /dev/md0 --level=0 --raid-devices=2 /dev/sdb /dev/sdc
+mdadm --detail --scan >/etc/mdadm.conf
+
+parted -s /dev/md0 mklabel gpt
+parted -s /dev/md0 mkpart primary ext4 0% 100%
+partprobe /dev/md0
+mkfs.ext4 -F /dev/md0p1
+
+mkdir -p /raid
+echo '/dev/md0p1 /raid ext4 defaults 0 0' >>/etc/fstab
+mount -a
+mkdir -p /raid/nfs
+chmod 777 /raid/nfs
+
+HQ-SRV: NFS export:
+
+cat >/etc/exports <<'EOF'
+/raid/nfs 10.10.200.0/28(rw,sync,no_subtree_check,no_root_squash) 10.20.30.0/29(rw,sync,no_subtree_check,no_root_squash)
+EOF
+
+systemctl enable --now nfs-server
+exportfs -rav
+
+ПРОВЕРКА HQ-SRV:
+
+cat /proc/mdstat
+mdadm --detail /dev/md0
+lsblk
+mount | grep /raid
+exportfs -v
+showmount -e localhost
+
+HQ-CLI и BR-CLI: автомонтирование NFS:
+
+apt-get update
+apt-get install -y autofs nfs-utils
+mkdir -p /mnt/nfs
+
+cat >>/etc/auto.master <<'EOF'
+/- /etc/auto.nfs
+EOF
+
+cat >/etc/auto.nfs <<'EOF'
+/mnt/nfs -rw hq-srv.au-team.irpo:/raid/nfs
+EOF
+
+systemctl enable --now autofs
+systemctl restart autofs
+
+ПРОВЕРКА на HQ-CLI/BR-CLI:
+
+ls /mnt/nfs
+touch /mnt/nfs/test-$(hostname).txt
+ls -l /mnt/nfs
+mount | grep nfs
+
+---------------------------------------------------------------------
+M2-03. Chrony: ISP сервер времени, остальные клиенты
+---------------------------------------------------------------------
+
+Где выполнять:
+- ISP = NTP-сервер, stratum 5;
+- клиенты: HQ-SRV, HQ-CLI, BR-RTR, HQ-RTR, BR-SRV, BR-CLI.
+
+ISP:
+
+apt-get update
+apt-get install -y chrony
+cp /etc/chrony.conf /etc/chrony.conf.bak.$(date +%F_%H%M)
+cat >/etc/chrony.conf <<'EOF'
+pool pool.ntp.org iburst
+local stratum 5
+allow 10.0.0.0/8
+allow 172.16.0.0/12
+makestep 1.0 3
+rtcsync
+EOF
+systemctl enable --now chronyd
+systemctl restart chronyd
+
+ПРОВЕРКА ISP:
+
+chronyc sources -v
+chronyc tracking
+ss -ulpn | grep ':123'
+
+Linux-клиенты, пример для HQ-SRV/HQ-CLI:
+
+apt-get install -y chrony
+cp /etc/chrony.conf /etc/chrony.conf.bak.$(date +%F_%H%M)
+sed -i '/^server /d;/^pool /d' /etc/chrony.conf
+echo 'server 172.16.1.1 iburst' >>/etc/chrony.conf
+systemctl enable --now chronyd
+systemctl restart chronyd
+chronyc sources -v
+chronyc tracking
+
+Linux-клиенты со стороны BR, если ближе ISP 172.16.2.1:
+
+sed -i '/^server /d;/^pool /d' /etc/chrony.conf
+echo 'server 172.16.2.1 iburst' >>/etc/chrony.conf
+systemctl restart chronyd
+chronyc sources -v
+
+EcoRouter-клиенты:
+
+configure terminal
+ntp server 172.16.1.1
+write memory
+show ntp status
+
+Для BR-RTR можно использовать 172.16.2.1.
+
+---------------------------------------------------------------------
+M2-04. Ansible на BR-SRV
+---------------------------------------------------------------------
+
+Где выполнять: BR-SRV.
+Задача:
+- рабочий каталог /etc/ansible;
+- inventory должен содержать HQ-SRV, HQ-CLI, HQ-RTR, BR-RTR, BR-CLI;
+- ansible all -m ping должен вернуть pong без ошибок.
+
+Установка:
+
+apt-get update
+apt-get install -y ansible sshpass python3
+mkdir -p /etc/ansible
+
+Конфиг, чтобы не ругался на host key и interpreter:
+
+cat >/etc/ansible/ansible.cfg <<'EOF'
+[defaults]
+inventory = /etc/ansible/hosts
+host_key_checking = False
+interpreter_python = auto_silent
+timeout = 30
+EOF
+
+Inventory, вариант через SSH/password:
+
+cat >/etc/ansible/hosts <<'EOF'
+[linux]
+hq-srv ansible_host=10.10.100.2 ansible_user=sshuser ansible_password=P@ssw0rd ansible_port=2026 ansible_become=yes ansible_become_method=sudo
+hq-cli ansible_host=10.10.200.2 ansible_user=sshuser ansible_password=P@ssw0rd ansible_port=2026 ansible_become=yes ansible_become_method=sudo
+br-cli ansible_host=10.20.30.2 ansible_user=sshuser ansible_password=P@ssw0rd ansible_port=2026 ansible_become=yes ansible_become_method=sudo
+
+[routers]
+hq-rtr ansible_host=10.10.100.1 ansible_user=net_admin ansible_password=P@ssw0rd
+br-rtr ansible_host=10.20.10.1 ansible_user=net_admin ansible_password=P@ssw0rd
+
+[all:vars]
+ansible_ssh_common_args='-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+EOF
+
+ПРОВЕРКА:
+
+ansible linux -m ping
+ansible all -m ping
+
+Если routers не отвечают на обычный ping-модуль из-за отсутствия Python:
+- проверь SSH вручную:
+
+ssh net_admin@10.10.100.1
+ssh net_admin@10.20.10.1
+
+- в отчете покажи, что linux-хосты дают pong, а маршрутизаторы доступны по SSH.
+- если есть поддержка network_cli, используй отдельную группу:
+
+cat >>/etc/ansible/hosts <<'EOF'
+
+[routers:vars]
+ansible_connection=network_cli
+ansible_network_os=ios
+EOF
+
+И проверяй командой:
+
+ansible routers -m ansible.netcommon.cli_command -a 'command="show ip interface brief"'
+
+---------------------------------------------------------------------
+M2-05. Docker testapp на BR-SRV
+---------------------------------------------------------------------
+
+Где выполнять: BR-SRV.
+Задача:
+- импортировать образы site_latest и mariadb_latest из Additional.iso/docker;
+- создать стек docker compose;
+- основной контейнер должен называться tespapp, именно tespapp, не testapp;
+- контейнер БД: db;
+- база: testdb;
+- пользователь: test;
+- пароль: P@ssw0rd;
+- приложение доступно извне на 8080.
+
+Команды:
+
+apt-get update
+apt-get install -y docker-engine docker-compose-plugin
+systemctl enable --now docker
+
+mkdir -p /mnt/additional
+mount /dev/cdrom /mnt/additional 2>/dev/null || mount /dev/sr0 /mnt/additional 2>/dev/null || true
+find /mnt/additional -maxdepth 3 -type f | egrep 'site|mariadb|tar'
+
+# Пути к tar адаптировать по факту:
+docker load -i /mnt/additional/docker/site_latest.tar
+docker load -i /mnt/additional/docker/mariadb_latest.tar
+
+docker images
+
+mkdir -p /opt/testapp
+cd /opt/testapp
+
+cat >docker-compose.yml <<'EOF'
+services:
+  db:
+    image: mariadb_latest
+    container_name: db
+    restart: always
+    environment:
+      MARIADB_ROOT_PASSWORD: P@ssw0rd
+      MARIADB_DATABASE: testdb
+      MARIADB_USER: test
+      MARIADB_PASSWORD: P@ssw0rd
+    volumes:
+      - db_data:/var/lib/mysql
+
+  tespapp:
+    image: site_latest
+    container_name: tespapp
+    restart: always
+    depends_on:
+      - db
+    ports:
+      - "8080:8080"
+    environment:
+      DB_HOST: db
+      DB_NAME: testdb
+      DB_USER: test
+      DB_PASSWORD: P@ssw0rd
+
+volumes:
+  db_data:
+EOF
+
+docker compose up -d
+
+ПРОВЕРКА:
+
+docker ps
+docker logs --tail=50 tespapp
+curl -I http://127.0.0.1:8080
+curl http://127.0.0.1:8080 | head
+
+Если image name после docker load другой:
+  docker images
+  исправить image: в docker-compose.yml на фактическое имя образа.
+
+---------------------------------------------------------------------
+M2-06. Apache + MariaDB webdb на HQ-SRV
+---------------------------------------------------------------------
+
+Где выполнять: HQ-SRV.
+Задача:
+- Apache;
+- MariaDB;
+- dump.sql из Additional.iso/web импортировать в БД webdb;
+- пользователь БД web/P@ssw0rd;
+- index.php и images в каталог Apache;
+- в index.php правильные данные подключения.
+
+Команды:
+
+apt-get update
+apt-get install -y apache2 apache2-mod_php mariadb-server php php-mysqlnd
+systemctl enable --now mariadb
+systemctl enable --now httpd2 2>/dev/null || systemctl enable --now apache2
+
+mkdir -p /mnt/additional
+mount /dev/cdrom /mnt/additional 2>/dev/null || mount /dev/sr0 /mnt/additional 2>/dev/null || true
+find /mnt/additional -maxdepth 3 -type f | egrep 'dump.sql|index.php'
+
+mysql -e "CREATE DATABASE IF NOT EXISTS webdb CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+mysql -e "CREATE USER IF NOT EXISTS 'web'@'localhost' IDENTIFIED BY 'P@ssw0rd';"
+mysql -e "CREATE USER IF NOT EXISTS 'web'@'%' IDENTIFIED BY 'P@ssw0rd';"
+mysql -e "GRANT ALL PRIVILEGES ON webdb.* TO 'web'@'localhost';"
+mysql -e "GRANT ALL PRIVILEGES ON webdb.* TO 'web'@'%';"
+mysql -e "FLUSH PRIVILEGES;"
+
+mysql webdb </mnt/additional/web/dump.sql
+
+# Каталог Apache на ALT часто /var/www/html или /var/www/apache2/html.
+WEBROOT=/var/www/html
+[ -d /var/www/apache2/html ] && WEBROOT=/var/www/apache2/html
+
+echo $WEBROOT
+cp /mnt/additional/web/index.php $WEBROOT/
+cp -r /mnt/additional/web/images $WEBROOT/ 2>/dev/null || true
+
+# Дальше открыть index.php и руками проверить настройки DB.
+nano $WEBROOT/index.php
+
+# Обычно нужно указать:
+# DB_HOST = localhost или 127.0.0.1
+# DB_NAME = webdb
+# DB_USER = web
+# DB_PASS = P@ssw0rd
+
+systemctl restart httpd2 2>/dev/null || systemctl restart apache2
+
+ПРОВЕРКА:
+
+mysql -e 'SHOW DATABASES;'
+mysql webdb -e 'SHOW TABLES;'
+ss -tulpen | grep ':80'
+curl -I http://127.0.0.1/
+curl http://127.0.0.1/ | head
+
+---------------------------------------------------------------------
+M2-07. Статический NAT портов на HQ-RTR и BR-RTR
+---------------------------------------------------------------------
+
+Задача:
+- HQ-RTR: внешний 8080 -> HQ-SRV web-приложение;
+- HQ-RTR: внешний 2026 -> HQ-SRV SSH 2026;
+- BR-RTR: внешний 8080 -> BR-SRV testapp 8080;
+- BR-RTR: внешний 2026 -> BR-SRV SSH 2026.
+
+HQ-RTR:
+
+enable
+configure terminal
+ip nat source static tcp 10.10.100.2 80   172.16.1.2 8080
+ip nat source static tcp 10.10.100.2 2026 172.16.1.2 2026
+write memory
+
+BR-RTR:
+
+enable
+configure terminal
+ip nat source static tcp 10.20.20.2 8080 172.16.2.2 8080
+ip nat source static tcp 10.20.20.2 2026 172.16.2.2 2026
+write memory
+
+ПРОВЕРКА с ISP:
+
+curl -I http://172.16.1.2:8080
+curl -I http://172.16.2.2:8080
+ssh -p 2026 sshuser@172.16.1.2
+ssh -p 2026 sshuser@172.16.2.2
+
+На роутерах:
+
+show ip nat translations
+show running-config | include static
+
+---------------------------------------------------------------------
+M2-08. Nginx reverse proxy на ISP + web-based auth для web
+---------------------------------------------------------------------
+
+Где выполнять: ISP.
+Задача:
+- web.au-team.irpo -> веб приложение HQ-SRV через HQ-RTR NAT 172.16.1.2:8080;
+- docker.au-team.irpo -> testapp BR-SRV через BR-RTR NAT 172.16.2.2:8080;
+- для web.au-team.irpo basic auth;
+- логин WEB, пароль P@ssw0rd;
+- файл /etc/nginx/.htpasswd.
+
+Команды:
+
+apt-get update
+apt-get install -y nginx apache2-utils
+
+htpasswd -bc /etc/nginx/.htpasswd WEB P@ssw0rd
+
+mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
+cat >/etc/nginx/sites-available/de.conf <<'EOF'
+server {
+    listen 80;
+    server_name web.au-team.irpo;
+
+    auth_basic "WEB";
+    auth_basic_user_file /etc/nginx/.htpasswd;
+
+    location / {
+        proxy_pass http://172.16.1.2:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+
+server {
+    listen 80;
+    server_name docker.au-team.irpo;
+
+    location / {
+        proxy_pass http://172.16.2.2:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+EOF
+
+ln -sf /etc/nginx/sites-available/de.conf /etc/nginx/sites-enabled/de.conf
+nginx -t
+systemctl enable --now nginx
+systemctl reload nginx
+
+Если в ALT нет sites-enabled:
+  добавить include /etc/nginx/sites-enabled/*.conf; в /etc/nginx/nginx.conf
+  или положить server-блоки в /etc/nginx/conf.d/de.conf.
+
+ПРОВЕРКА на ISP:
+
+curl -I -H 'Host: web.au-team.irpo' http://127.0.0.1/
+curl -u WEB:P@ssw0rd -H 'Host: web.au-team.irpo' http://127.0.0.1/ | head
+curl -H 'Host: docker.au-team.irpo' http://127.0.0.1/ | head
+
+ПРОВЕРКА с клиента:
+
+curl -u WEB:P@ssw0rd http://web.au-team.irpo/ | head
+curl http://docker.au-team.irpo/ | head
+
+---------------------------------------------------------------------
+M2-09. Яндекс Браузер на HQ-CLI
+---------------------------------------------------------------------
+
+Где выполнять: HQ-CLI.
+
+Вариант 1, из репозитория:
+
+apt-get update
+apt-get install -y yandex-browser-stable
+
+Вариант 2, из Additional.iso:
+
+mkdir -p /mnt/additional
+mount /dev/cdrom /mnt/additional 2>/dev/null || mount /dev/sr0 /mnt/additional 2>/dev/null || true
+find /mnt/additional -type f | grep -i yandex
+apt-get install -y /mnt/additional/path/to/yandex-browser*.rpm
+
+ПРОВЕРКА:
+
+yandex-browser --version 2>/dev/null || rpm -qa | grep -i yandex
+
+---------------------------------------------------------------------
+M2-10. Финальная проверка модуля 2
+---------------------------------------------------------------------
+
+BR-SRV Samba:
+
+samba-tool domain info 127.0.0.1
+samba-tool user list | egrep 'hquser|bruser'
+samba-tool group listmembers hq
+samba-tool group listmembers br
+
+HQ-CLI/BR-CLI домен:
+
+realm list
+id hquser1
+id bruser1
+
+NFS:
+
+showmount -e hq-srv.au-team.irpo
+ls /mnt/nfs
+touch /mnt/nfs/check-$(hostname).txt
+
+Chrony:
+
+chronyc sources -v
+chronyc tracking
+
+Ansible:
+
+cd /etc/ansible
+ansible all -m ping
+
+Docker:
+
+docker ps
+curl -I http://br-srv.au-team.irpo:8080
+
+Web HQ:
+
+curl -I http://hq-srv.au-team.irpo/
+
+Nginx proxy:
+
+curl -u WEB:P@ssw0rd http://web.au-team.irpo/ | head
+curl http://docker.au-team.irpo/ | head
+
+======================================================================
+M3. МОДУЛЬ 3 — ЭКСПЛУАТАЦИЯ И БЕЗОПАСНОСТЬ
+======================================================================
+
+Цель модуля:
+- импорт пользователей в домен;
+- центр сертификации и HTTPS;
+- IPsec-туннель;
+- firewall;
+- CUPS PDF-принтер;
+- syslog + logrotate;
+- Zabbix;
+- инвентаризация Ansible;
+- PAM-защита SSH;
+- Кибер Бэкап.
+
+---------------------------------------------------------------------
+M3-01. Импорт пользователей из users.csv в Samba-домен
+---------------------------------------------------------------------
+
+Где выполнять: BR-SRV.
+Файл: users.csv в Additional.iso.
+Задача:
+- импортировать пользователей с паролями и атрибутами;
+- проверить вход на HQ-CLI.
+
+Найти файл:
+
+mkdir -p /mnt/additional
+mount /dev/cdrom /mnt/additional 2>/dev/null || mount /dev/sr0 /mnt/additional 2>/dev/null || true
+find /mnt/additional -name 'users.csv' -o -name '*users*'
+head -5 /mnt/additional/users.csv 2>/dev/null || true
+
+Посмотреть разделитель:
+
+head -3 /mnt/additional/users.csv
+
+Вариант для CSV с разделителем ; и колонками login;password;firstname;lastname:
+
+while IFS=';' read -r login pass firstname lastname rest; do
+  [ -z "$login" ] && continue
+  [ "$login" = "login" ] && continue
+  [ "$login" = "username" ] && continue
+  samba-tool user create "$login" "$pass" --given-name="$firstname" --surname="$lastname" 2>/dev/null || true
+done </mnt/additional/users.csv
+
+Вариант для CSV с разделителем , и колонками login,password,fullname:
+
+while IFS=',' read -r login pass fullname rest; do
+  [ -z "$login" ] && continue
+  [ "$login" = "login" ] && continue
+  [ "$login" = "username" ] && continue
+  samba-tool user create "$login" "$pass" --given-name="$fullname" 2>/dev/null || true
+done </mnt/additional/users.csv
+
+ПРОВЕРКА:
+
+samba-tool user list | tail
+samba-tool user show ИМЯ_ИМПОРТИРОВАННОГО_ПОЛЬЗОВАТЕЛЯ
+
+На HQ-CLI:
+
+id ИМЯ_ИМПОРТИРОВАННОГО_ПОЛЬЗОВАТЕЛЯ
+su - ИМЯ_ИМПОРТИРОВАННОГО_ПОЛЬЗОВАТЕЛЯ
+
+---------------------------------------------------------------------
+M3-02. Центр сертификации на HQ-SRV и HTTPS для web/docker
+---------------------------------------------------------------------
+
+Где выполнять:
+- HQ-SRV: создать CA и сертификаты;
+- ISP: поставить сертификаты в nginx;
+- HQ-CLI: добавить корневой сертификат в доверенные.
+
+Требование:
+- отечественные алгоритмы шифрования;
+- срок сертификатов 30 дней;
+- https://web.au-team.irpo и https://docker.au-team.irpo без предупреждений в браузере HQ-CLI.
+
+ВНИМАНИЕ:
+Команды ГОСТ зависят от установленного openssl/engine/provider.
+Если gost2012_256 не поддерживается, смотри доступные алгоритмы:
+
+openssl engine -t 2>/dev/null
+openssl list -public-key-algorithms | grep -i gost
+openssl list -providers 2>/dev/null
+
+HQ-SRV: создать CA и сертификаты, вариант ГОСТ:
+
+apt-get update
+apt-get install -y openssl
+mkdir -p /etc/pki/au-team
+cd /etc/pki/au-team
+
+openssl req -x509 -newkey gost2012_256 -nodes -days 30 \
+  -keyout ca.key -out ca.crt \
+  -subj "/C=RU/O=AU-TEAM/CN=au-team-CA"
+
+for n in web docker; do
+  openssl req -newkey gost2012_256 -nodes \
+    -keyout $n.key -out $n.csr \
+    -subj "/C=RU/O=AU-TEAM/CN=$n.au-team.irpo"
+
+  openssl x509 -req -in $n.csr \
+    -CA ca.crt -CAkey ca.key -CAcreateserial \
+    -days 30 -out $n.crt
+
+done
+
+Если ГОСТ-команда не сработала, аварийный вариант RSA для работоспособности HTTPS:
+
+openssl req -x509 -newkey rsa:4096 -nodes -days 30 \
+  -keyout ca.key -out ca.crt \
+  -subj "/C=RU/O=AU-TEAM/CN=au-team-CA"
+
+for n in web docker; do
+  openssl req -newkey rsa:2048 -nodes \
+    -keyout $n.key -out $n.csr \
+    -subj "/C=RU/O=AU-TEAM/CN=$n.au-team.irpo"
+  openssl x509 -req -in $n.csr \
+    -CA ca.crt -CAkey ca.key -CAcreateserial \
+    -days 30 -out $n.crt
+done
+
+Передать сертификаты на ISP:
+
+scp -P 2026 /etc/pki/au-team/web.crt /etc/pki/au-team/web.key /etc/pki/au-team/docker.crt /etc/pki/au-team/docker.key sshuser@ISP_IP:/tmp/
+
+Или скопировать через общий диск/буфер.
+
+ISP: положить сертификаты:
+
+mkdir -p /etc/nginx/ssl
+cp /tmp/web.crt /etc/nginx/ssl/web.crt
+cp /tmp/web.key /etc/nginx/ssl/web.key
+cp /tmp/docker.crt /etc/nginx/ssl/docker.crt
+cp /tmp/docker.key /etc/nginx/ssl/docker.key
+chmod 600 /etc/nginx/ssl/*.key
+
+ISP: nginx HTTPS reverse proxy:
+
+cat >/etc/nginx/sites-available/de-ssl.conf <<'EOF'
+server {
+    listen 80;
+    server_name web.au-team.irpo docker.au-team.irpo;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name web.au-team.irpo;
+
+    ssl_certificate     /etc/nginx/ssl/web.crt;
+    ssl_certificate_key /etc/nginx/ssl/web.key;
+
+    auth_basic "WEB";
+    auth_basic_user_file /etc/nginx/.htpasswd;
+
+    location / {
+        proxy_pass http://172.16.1.2:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+
+server {
+    listen 443 ssl;
+    server_name docker.au-team.irpo;
+
+    ssl_certificate     /etc/nginx/ssl/docker.crt;
+    ssl_certificate_key /etc/nginx/ssl/docker.key;
+
+    location / {
+        proxy_pass http://172.16.2.2:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+EOF
+
+ln -sf /etc/nginx/sites-available/de-ssl.conf /etc/nginx/sites-enabled/de-ssl.conf
+nginx -t
+systemctl reload nginx
+
+HQ-CLI: доверие корневому сертификату:
+
+# Нужно передать ca.crt с HQ-SRV на HQ-CLI.
+mkdir -p /etc/pki/ca-trust/source/anchors
+cp ca.crt /etc/pki/ca-trust/source/anchors/au-team-ca.crt
+update-ca-trust 2>/dev/null || trust anchor /etc/pki/ca-trust/source/anchors/au-team-ca.crt
+
+ПРОВЕРКА:
+
+# ISP
+ss -tulpen | egrep ':(80|443)'
+nginx -t
+
+# HQ-CLI
+curl -Iv https://web.au-team.irpo/
+curl -Iv https://docker.au-team.irpo/
+
+В браузере HQ-CLI открыть:
+  https://web.au-team.irpo
+  https://docker.au-team.irpo
+Не должно быть предупреждения о недоверенном сертификате.
+
+---------------------------------------------------------------------
+M3-03. IPsec-туннель между HQ-RTR и BR-RTR
+---------------------------------------------------------------------
+
+Задача:
+- перенастроить туннель с базового GRE на защищенный IPsec;
+- динамическая маршрутизация должна снова работать.
+
+Важное:
+Точный синтаксис IPsec на EcoRouter зависит от версии.
+Сохрани идею: защитить трафик между peer 172.16.1.2 и 172.16.2.2.
+Варианты:
+1) GRE over IPsec: оставить tunnel.1, но шифровать GRE через IPsec policy.
+2) IPsec VTI/tunnel interface: создать защищенный tunnel-interface и повесить OSPF на него.
+
+Параметры для настройки:
+
+Peer HQ: 172.16.1.2
+Peer BR: 172.16.2.2
+PSK: P@ssw0rd
+IKE: IKEv2
+ESP: aes256/sha256 или ГОСТ, если доступен
+Локальные сети HQ: 10.10.100.0/27, 10.10.200.0/28, 10.10.30.0/29
+Локальные сети BR: 10.20.20.0/28, 10.20.30.0/29
+Туннельная сеть: 10.10.10.0/30
+
+Что обязательно проверить после IPsec:
+
+# HQ-RTR
+ping 10.10.10.2
+show ip ospf neighbor
+show ip route ospf
+show crypto ipsec sa
+show crypto ike sa
+
+# BR-RTR
+ping 10.10.10.1
+show ip ospf neighbor
+show ip route ospf
+show crypto ipsec sa
+show crypto ike sa
+
+Если OSPF пропал:
+1) проверить IPsec SA;
+2) проверить, что tunnel.1 up;
+3) проверить, что no passive-interface tunnel.1 остался;
+4) проверить firewall: UDP 500/4500, ESP, GRE между peers;
+5) временно перезапустить OSPF/туннель.
+
+---------------------------------------------------------------------
+M3-04. Межсетевой экран на HQ-RTR и BR-FW в сторону ISP
+---------------------------------------------------------------------
+
+Задача:
+- разрешить http, https, dns, ntp, icmp и нужные служебные протоколы;
+- запретить остальные подключения из Интернета во внутреннюю сеть;
+- не сломать IPsec/GRE/OSPF.
+
+Минимальная политика:
+Разрешить:
+  established/related
+  ICMP
+  TCP 80
+  TCP 443
+  UDP/TCP 53
+  UDP 123
+  UDP 500 IKE
+  UDP 4500 NAT-T
+  ESP protocol 50
+  GRE protocol 47, если используется GRE over IPsec/без IPsec
+Запретить:
+  доступ из Internet к RFC1918 внутренним сетям, кроме опубликованных сервисов
+
+EcoRouter-подобный пример ACL на HQ-RTR WAN:
+
+enable
+configure terminal
+ip access-list extended INET-IN
+ permit icmp any any
+ permit tcp any any eq 80
+ permit tcp any any eq 443
+ permit udp any any eq 53
+ permit tcp any any eq 53
+ permit udp any any eq 123
+ permit udp host 172.16.2.2 host 172.16.1.2 eq 500
+ permit udp host 172.16.2.2 host 172.16.1.2 eq 4500
+ permit esp host 172.16.2.2 host 172.16.1.2
+ permit gre host 172.16.2.2 host 172.16.1.2
+ deny ip any 10.0.0.0/8
+ deny ip any 172.16.0.0/12
+ deny ip any 192.168.0.0/16
+ permit ip any any
+exit
+interface WAN
+ ip access-group INET-IN in
+exit
+write memory
+
+BR-FW:
+Настроить аналогично в GUI/CLI:
+- WAN zone -> LAN deny by default;
+- allow established/related;
+- allow ICMP;
+- allow HTTP/HTTPS/DNS/NTP;
+- allow IPsec/GRE только между 172.16.1.2 и 172.16.2.2;
+- allow опубликованные сервисы, если нужны;
+- включить логирование deny.
+
+ПРОВЕРКА:
+
+С внешней стороны:
+  curl -I http://web.au-team.irpo
+  curl -I https://web.au-team.irpo
+  ping web.au-team.irpo
+
+На HQ-RTR:
+  show access-lists
+  show running-config | include access
+
+---------------------------------------------------------------------
+M3-05. CUPS PDF-принтер
+---------------------------------------------------------------------
+
+Где выполнять:
+- HQ-SRV: сервер печати, виртуальный PDF-принтер;
+- HQ-CLI: подключить как принтер по умолчанию.
+
+HQ-SRV:
+
+apt-get update
+apt-get install -y cups cups-pdf
+systemctl enable --now cups
+
+# Разрешить удаленный доступ к CUPS.
+cupsctl --remote-any --share-printers
+
+# Создать PDF-принтер.
+lpadmin -p PDF -E -v cups-pdf:/ -m drv:///sample.drv/generic.ppd
+lpadmin -d PDF
+systemctl restart cups
+
+ПРОВЕРКА HQ-SRV:
+
+lpstat -p -d
+ss -tulpen | grep ':631'
+
+HQ-CLI:
+
+apt-get update
+apt-get install -y cups cups-client
+systemctl enable --now cups
+
+lpadmin -p PDF -E -v ipp://hq-srv.au-team.irpo/printers/PDF -m everywhere
+lpadmin -d PDF
+
+ПРОВЕРКА HQ-CLI:
+
+lpstat -p -d
+echo 'DE TEST PRINT' | lp -d PDF
+
+---------------------------------------------------------------------
+M3-06. Syslog на HQ-SRV + logrotate
+---------------------------------------------------------------------
+
+Задача:
+- HQ-SRV — сервер сбора логов;
+- HQ-SRV не должен отправлять логи сам себе;
+- собирать warning и выше от HQ-RTR, BR-RTR, BR-SRV;
+- все логи в /opt;
+- для каждого устройства отдельная поддиректория с именем машины;
+- ротация раз в неделю;
+- сжатие;
+- minsize 10M.
+
+HQ-SRV:
+
+apt-get update
+apt-get install -y rsyslog logrotate
+mkdir -p /opt
+
+cat >/etc/rsyslog.d/10-remote.conf <<'EOF'
+module(load="imudp")
+input(type="imudp" port="514")
+
+module(load="imtcp")
+input(type="imtcp" port="514")
+
+template(name="RemoteLogs" type="string" string="/opt/%HOSTNAME%/syslog.log")
+*.warning ?RemoteLogs
+& stop
+EOF
+
+systemctl enable --now rsyslog
+systemctl restart rsyslog
+
+ПРОВЕРКА HQ-SRV:
+
+ss -tulpen | grep ':514'
+ss -ulpen | grep ':514'
+
+BR-SRV как клиент syslog:
+
+cat >/etc/rsyslog.d/90-remote-warning.conf <<'EOF'
+*.warning @10.10.100.2:514
+EOF
+systemctl restart rsyslog
+logger -p auth.warning 'TEST WARNING FROM BR-SRV'
+
+HQ-RTR/BR-RTR как клиенты syslog, пример:
+
+configure terminal
+logging host 10.10.100.2
+logging trap warnings
+write memory
+
+Если команда другая, найти через:
+  logging ?
+  show logging
+
+HQ-SRV: проверить файлы логов:
+
+find /opt -type f -maxdepth 3 -print -exec tail -5 {} \;
+
+Logrotate на HQ-SRV:
+
+cat >/etc/logrotate.d/opt-remote <<'EOF'
+/opt/*/*.log {
+    weekly
+    rotate 4
+    compress
+    minsize 10M
+    missingok
+    notifempty
+    create 0640 root root
+}
+EOF
+
+ПРОВЕРКА logrotate:
+
+logrotate -d /etc/logrotate.d/opt-remote
+
+---------------------------------------------------------------------
+M3-07. Zabbix container на HQ-SRV, URL mon.au-team.irpo
+---------------------------------------------------------------------
+
+Задача:
+- на HQ-SRV заранее добавлен контейнер Zabbix;
+- мониторинг доступен по http://mon.au-team.irpo для сетей HQ;
+- без внешнего доступа;
+- мониторить HQ-SRV и BR-SRV;
+- визуально: CPU, RAM, disk;
+- логин/пароль admin/P@ssw0rd;
+- DNS-запись mon.au-team.irpo.
+
+HQ-SRV: найти контейнер/compose:
+
+docker ps -a 2>/dev/null || true
+find / -maxdepth 4 -iname '*zabbix*' 2>/dev/null | head -50
+
+Если есть compose:
+
+cd /opt/zabbix 2>/dev/null || cd /root
+find . -maxdepth 2 -iname '*compose*' -o -name 'docker-compose.yml'
+docker compose up -d
+
+Если есть остановленные контейнеры:
+
+docker start $(docker ps -aq --filter 'name=zabbix') 2>/dev/null || true
+
+docker ps
+
+Определить порт Zabbix web:
+
+docker ps --format 'table {{.Names}}\t{{.Ports}}'
+ss -tulpen | egrep ':80|:8080|:8081|:8082'
+
+DNS: добавить mon в зону au-team.irpo на HQ-SRV:
+
+# В /var/lib/bind/etc/zone/au-team.irpo.db добавить/проверить:
+# mon IN A 10.10.100.2
+# увеличить serial, например 1 -> 2.
+
+rndc reload 2>/dev/null || systemctl restart bind
+host mon.au-team.irpo 10.10.100.2
+
+Nginx локальный reverse proxy на HQ-SRV для mon:
+
+apt-get install -y nginx
+
+cat >/etc/nginx/conf.d/mon.conf <<'EOF'
+server {
+    listen 80;
+    server_name mon.au-team.irpo;
+
+    # доступ только из HQ-сетей
+    allow 10.10.100.0/27;
+    allow 10.10.200.0/28;
+    deny all;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+EOF
+
+# Если Zabbix web работает не на 127.0.0.1:8080, заменить proxy_pass на фактический порт.
+nginx -t
+systemctl enable --now nginx
+systemctl reload nginx
+
+Zabbix UI:
+1) открыть http://mon.au-team.irpo с HQ-CLI;
+2) войти admin / P@ssw0rd;
+3) добавить host HQ-SRV и BR-SRV;
+4) подключить template Linux by Zabbix agent или Simple checks;
+5) вывести/показать CPU, RAM, disk.
+
+Если нужен агент:
+
+# HQ-SRV и BR-SRV
+apt-get install -y zabbix-agent
+sed -i 's/^Server=.*/Server=10.10.100.2/' /etc/zabbix/zabbix_agentd.conf
+sed -i 's/^ServerActive=.*/ServerActive=10.10.100.2/' /etc/zabbix/zabbix_agentd.conf
+systemctl enable --now zabbix_agentd
+systemctl restart zabbix_agentd
+
+ПРОВЕРКА:
+
+host mon.au-team.irpo
+curl -I http://mon.au-team.irpo
+curl -I http://10.10.100.2
+
+---------------------------------------------------------------------
+M3-08. Инвентаризация через Ansible
+---------------------------------------------------------------------
+
+Задача:
+- на BR-SRV через Ansible собрать информацию о машинах HQ-SRV, HQ-CLI и BR-CLI;
+- собрать имя компьютера и IP-адрес;
+- playbook в /etc/ansible;
+- отчеты в /etc/ansible/PC-INFO;
+- формат .yml;
+- файл отчета называется именем компьютера.
+
+Где выполнять: BR-SRV.
+
+mkdir -p /etc/ansible/PC-INFO
+
+Если в Additional.iso есть готовый playbook:
+
+find /mnt/additional -path '*playbook*' -type f -maxdepth 5
+cp /mnt/additional/playbook/* /etc/ansible/ 2>/dev/null || true
+
+Рабочий playbook, если нужно создать вручную:
+
+cat >/etc/ansible/pcinfo.yml <<'EOF'
+- name: Collect PC inventory
+  hosts: hq-srv,hq-cli,br-cli
+  gather_facts: yes
+  tasks:
+    - name: Save PC info on BR-SRV
+      copy:
+        dest: "/etc/ansible/PC-INFO/{{ ansible_hostname }}.yml"
+        content: |
+          computer: "{{ ansible_hostname }}"
+          fqdn: "{{ ansible_fqdn | default(ansible_hostname) }}"
+          ip: "{{ ansible_default_ipv4.address | default('no-ip') }}"
+      delegate_to: localhost
+EOF
+
+Запуск:
+
+cd /etc/ansible
+ansible-playbook pcinfo.yml
+
+ПРОВЕРКА:
+
+ls -l /etc/ansible/PC-INFO
+cat /etc/ansible/PC-INFO/*.yml
+
+---------------------------------------------------------------------
+M3-09. PAM-защита SSH от перебора на HQ-SRV
+---------------------------------------------------------------------
+
+Задача:
+- при 3 неуспешных авторизациях адрес/пользователь попадает в бан;
+- бан на 1 минуту.
+
+Вариант через pam_faillock:
+
+apt-get update
+apt-get install -y pam_faillock 2>/dev/null || true
+
+cat >/etc/security/faillock.conf <<'EOF'
+deny = 3
+unlock_time = 60
+fail_interval = 900
+audit
+EOF
+
+Проверить, подключен ли pam_faillock:
+
+grep -R "pam_faillock" /etc/pam.d || true
+
+Если не подключен, аккуратно добавить в /etc/pam.d/sshd.
+Перед изменением:
+
+cp /etc/pam.d/sshd /etc/pam.d/sshd.bak.$(date +%F_%H%M)
+
+Типовой вариант строк:
+
+# В начало auth-секции:
+auth required pam_faillock.so preauth silent audit deny=3 unlock_time=60
+# После pam_unix.so / основной auth:
+auth [default=die] pam_faillock.so authfail audit deny=3 unlock_time=60
+# В account-секцию:
+account required pam_faillock.so
+
+После ручного редактирования:
+
+systemctl restart sshd
+
+ПРОВЕРКА:
+
+# С другой машины 3 раза ввести неверный пароль:
+ssh -p 2026 sshuser@hq-srv.au-team.irpo
+
+# На HQ-SRV посмотреть:
+faillock --user sshuser 2>/dev/null || pam_tally2 --user sshuser 2>/dev/null || true
+journalctl -u sshd -n 50
+
+Разблокировка, если заблокировал себя:
+
+faillock --user sshuser --reset 2>/dev/null || pam_tally2 --user sshuser --reset 2>/dev/null || true
+
+---------------------------------------------------------------------
+M3-10. Кибер Бэкап 17.4
+---------------------------------------------------------------------
+
+Задача:
+- HQ-SRV: сервер управления Кибер Бэкап 17.4;
+- организация: irpo;
+- админ: irpoadmin / P@ssw0rd;
+- HQ-CLI: агент + узел хранения;
+- на HQ-CLI создать /backup и выбрать как хранилище;
+- создать 2 плана резервного копирования для HQ-SRV:
+  1) /etc со всеми подкаталогами;
+  2) БД webdb типа mysql/mariadb;
+- выполнить оба backup на хранилище HQ-CLI.
+
+Порядок действий:
+
+HQ-SRV:
+1) Найти установщик в Additional.iso или на рабочем столе:
+
+find /mnt/additional -iname '*backup*' -o -iname '*cyber*' -o -iname '*kiber*'
+
+2) Установить Management Server Кибер Бэкап 17.4.
+3) Открыть web-консоль управления.
+4) Создать организацию:
+
+   name: irpo
+
+5) Создать администратора:
+
+   login: irpoadmin
+   password: P@ssw0rd
+   role: administrator
+
+HQ-CLI:
+1) Создать хранилище:
+
+mkdir -p /backup
+chmod 777 /backup
+
+2) Установить агент Кибер Бэкап + компонент Storage Node/узел хранения.
+3) Подключить агент/узел хранения к HQ-SRV.
+4) В консоли HQ-SRV добавить /backup на HQ-CLI как устройство хранения.
+
+Планы резервного копирования:
+
+План 1:
+  name: Backup-HQ-SRV-etc
+  source: HQ-SRV:/etc
+  include subdirectories: yes
+  destination: storage node HQ-CLI:/backup
+  run: now
+
+План 2:
+  name: Backup-HQ-SRV-webdb
+  type: MySQL/MariaDB database
+  source: HQ-SRV:webdb
+  credentials: root или web/P@ssw0rd, как требует программа
+  destination: storage node HQ-CLI:/backup
+  run: now
+
+Что показать в отчете:
+- Кибер Бэкап 17.4 установлен;
+- организация irpo;
+- пользователь irpoadmin;
+- HQ-CLI подключен как агент и узел хранения;
+- /backup выбран как хранилище;
+- оба плана созданы;
+- оба задания завершились успешно.
+
+ПРОВЕРКА на HQ-CLI:
+
+ls -lah /backup
+find /backup -maxdepth 3 -type f | head
+
+---------------------------------------------------------------------
+M3-11. Финальная проверка модуля 3
+---------------------------------------------------------------------
+
+Пользователи:
+
+samba-tool user list | tail
+id ИМПОРТИРОВАННЫЙ_ПОЛЬЗОВАТЕЛЬ
+
+HTTPS:
+
+curl -Iv https://web.au-team.irpo/
+curl -Iv https://docker.au-team.irpo/
+
+IPsec/OSPF:
+
+show crypto ipsec sa
+show crypto ike sa
+show ip ospf neighbor
+show ip route ospf
+
+Firewall:
+
+show access-lists
+curl -I https://web.au-team.irpo
+curl -I https://docker.au-team.irpo
+
+CUPS:
+
+lpstat -p -d
+
+Syslog:
+
+find /opt -type f -maxdepth 3 -print -exec tail -5 {} \;
+logrotate -d /etc/logrotate.d/opt-remote
+
+Zabbix:
+
+host mon.au-team.irpo
+curl -I http://mon.au-team.irpo
+# в браузере: admin / P@ssw0rd, есть HQ-SRV и BR-SRV, графики CPU/RAM/disk
+
+Ansible inventory:
+
+ls -l /etc/ansible/PC-INFO
+cat /etc/ansible/PC-INFO/*.yml
+
+PAM:
+
+faillock --user sshuser 2>/dev/null || true
+journalctl -u sshd -n 30
+
+Backup:
+
+ls -lah /backup
+# в GUI показать успешные задания
+
+======================================================================
+4. БЫСТРЫЕ КОМАНДЫ ДИАГНОСТИКИ
+======================================================================
+
+---------------------------------------------------------------------
+4.1. Linux: сеть
+---------------------------------------------------------------------
+
+hostname -f
+ip -br a
+ip r
+cat /etc/resolv.conf
+ping -c 2 10.10.100.1
+ping -c 2 10.10.100.2
+ping -c 2 10.20.20.2
+ping -c 2 77.88.8.8
+host hq-srv.au-team.irpo
+host br-srv.au-team.irpo
+tracepath 10.20.20.2 2>/dev/null || traceroute 10.20.20.2
+
+---------------------------------------------------------------------
+4.2. Linux: службы
+---------------------------------------------------------------------
+
+systemctl --failed
+systemctl status network --no-pager
+systemctl status sshd --no-pager
+systemctl status bind --no-pager
+systemctl status chronyd --no-pager
+systemctl status nginx --no-pager
+systemctl status rsyslog --no-pager
+ss -tulpen
+ss -ulpen
+journalctl -xe -n 80
+
+---------------------------------------------------------------------
+4.3. EcoRouter
+---------------------------------------------------------------------
+
+show port brief
+show service-instance brief
+show ip interface brief
+show ip route
+show ip route ospf
+show interface tunnel.1
+show ip ospf neighbor
+show ip nat translations
+show running-config
+show running-config | include nat
+show running-config | include ospf
+show running-config | include tunnel
+show access-lists
+
+---------------------------------------------------------------------
+4.4. Web
+---------------------------------------------------------------------
+
+curl -I http://hq-srv.au-team.irpo/
+curl -I http://br-srv.au-team.irpo:8080/
+curl -u WEB:P@ssw0rd -I http://web.au-team.irpo/
+curl -I http://docker.au-team.irpo/
+curl -Iv https://web.au-team.irpo/
+curl -Iv https://docker.au-team.irpo/
+
+---------------------------------------------------------------------
+4.5. Docker
+---------------------------------------------------------------------
+
+docker images
+docker ps -a
+docker logs --tail=100 tespapp
+docker logs --tail=100 db
+cd /opt/testapp && docker compose ps
+cd /opt/testapp && docker compose logs --tail=50
+
+---------------------------------------------------------------------
+4.6. Samba/AD
+---------------------------------------------------------------------
+
+samba-tool domain info 127.0.0.1
+samba-tool user list
+samba-tool group list
+samba-tool group listmembers hq
+samba-tool group listmembers br
+host -t SRV _ldap._tcp.au-team.irpo
+kinit Administrator
+klist
+realm list
+id hquser1
+id bruser1
+
+---------------------------------------------------------------------
+4.7. NFS/RAID
+---------------------------------------------------------------------
+
+cat /proc/mdstat
+mdadm --detail /dev/md0
+lsblk
+mount | grep raid
+exportfs -v
+showmount -e hq-srv.au-team.irpo
+ls -la /mnt/nfs
+
+---------------------------------------------------------------------
+4.8. Ansible
+---------------------------------------------------------------------
+
+cd /etc/ansible
+ansible --version
+ansible-inventory --list
+ansible all -m ping
+ansible all -m setup -a 'filter=ansible_hostname'
+ansible-playbook pcinfo.yml
+
+======================================================================
+5. ЧТО ПИСАТЬ В ОТЧЕТЫ
+======================================================================
+
+---------------------------------------------------------------------
+5.1. Модуль 1: что приложить
+---------------------------------------------------------------------
+
+1) Таблица адресации:
+   - имя устройства;
+   - интерфейс/порт;
+   - IP/маска;
+   - шлюз;
+   - VLAN;
+   - назначение.
+
+2) Коммутация:
+   - VLAN100 для HQ-SRV;
+   - VLAN200 для HQ-CLI;
+   - VLAN999 управление;
+   - trunk к HQ-RTR.
+
+3) SSH:
+   - sshuser UID 2026;
+   - sudo без пароля;
+   - порт 2026;
+   - MaxAuthTries 2;
+   - banner Authorized access only.
+
+4) GRE/OSPF:
+   - tunnel.1 IP;
+   - OSPF area 0;
+   - passive-interface default;
+   - MD5 key P@ssw0rd;
+   - show ip ospf neighbor.
+
+5) DHCP/DNS/NAT:
+   - DHCP pool;
+   - DNS zone;
+   - NAT translations;
+   - ping/host проверки.
+
+---------------------------------------------------------------------
+5.2. Модуль 2: что приложить
+---------------------------------------------------------------------
+
+1) Samba DC:
+   - домен au-team.irpo;
+   - пользователи hquser/bruser;
+   - группы hq/br;
+   - вход на HQ-CLI/BR-CLI;
+   - sudo restrictions для hq.
+
+2) RAID/NFS:
+   - cat /proc/mdstat;
+   - lsblk;
+   - /etc/exports;
+   - showmount;
+   - touch file in /mnt/nfs.
+
+3) Chrony:
+   - chronyc sources/tracking;
+   - ISP stratum 5.
+
+4) Ansible:
+   - /etc/ansible/hosts;
+   - ansible all -m ping.
+
+5) Docker:
+   - docker ps;
+   - docker-compose.yml;
+   - curl 8080.
+
+6) Apache/MariaDB:
+   - база webdb;
+   - пользователь web;
+   - curl web.
+
+7) NAT/proxy:
+   - static NAT config;
+   - nginx config;
+   - web basic auth WEB/P@ssw0rd;
+   - curl web/docker.
+
+8) Yandex Browser:
+   - версия/скрин запуска.
+
+---------------------------------------------------------------------
+5.3. Модуль 3: что приложить
+---------------------------------------------------------------------
+
+1) Импорт пользователей:
+   - users.csv;
+   - samba-tool user list;
+   - успешный вход на HQ-CLI.
+
+2) CA/HTTPS:
+   - CA создан;
+   - сертификаты на 30 дней;
+   - HQ-CLI доверяет CA;
+   - браузер без предупреждений.
+
+3) IPsec:
+   - show crypto/ipsec sa;
+   - show ip ospf neighbor после перенастройки.
+
+4) Firewall:
+   - разрешенные протоколы;
+   - deny остального;
+   - проверка web/docker.
+
+5) CUPS:
+   - lpstat;
+   - PDF printer default на HQ-CLI.
+
+6) Syslog/logrotate:
+   - /opt/<hostname>/syslog.log;
+   - logrotate config.
+
+7) Zabbix:
+   - mon.au-team.irpo;
+   - hosts HQ-SRV/BR-SRV;
+   - CPU/RAM/disk.
+
+8) Ansible inventory:
+   - /etc/ansible/PC-INFO/*.yml.
+
+9) PAM:
+   - 3 ошибки -> бан 1 минута.
+
+10) Кибер Бэкап:
+   - организация irpo;
+   - irpoadmin;
+   - HQ-CLI storage /backup;
+   - два успешных backup-плана.
+
+======================================================================
+6. МИНИ-АЛГОРИТМ НА ЭКЗАМЕН
+======================================================================
+
+Если времени мало, делай в таком порядке:
+
+Модуль 1:
+1) IP и имена на всех устройствах.
+2) VLAN/trunk HQ.
+3) SSH users.
+4) GRE tunnel.
+5) OSPF.
+6) NAT.
+7) DHCP.
+8) DNS.
+9) timezone.
+10) проверки и отчет.
+
+Модуль 2:
+1) Проверить преднастроенную сеть.
+2) Samba DC + пользователи + домен клиенты.
+3) RAID0 + NFS.
+4) Chrony.
+5) Ansible.
+6) Docker testapp.
+7) Apache/MariaDB webdb.
+8) Static NAT.
+9) Nginx proxy + WEB auth.
+10) Yandex Browser.
+11) проверки и отчет.
+
+Модуль 3:
+1) Импорт users.csv.
+2) CA + HTTPS.
+3) IPsec и восстановить OSPF.
+4) Firewall.
+5) CUPS.
+6) Syslog + logrotate.
+7) Zabbix mon.
+8) Ansible PC-INFO.
+9) PAM SSH ban.
+10) Кибер Бэкап.
+11) проверки и отчет.
+
+======================================================================
+7. ЧАСТЫЕ ОШИБКИ И БЫСТРЫЕ ИСПРАВЛЕНИЯ
+======================================================================
+
+1) Нет связи между офисами:
+   - проверить GRE ping 10.10.10.1/10.10.10.2;
+   - проверить OSPF neighbor;
+   - проверить firewall;
+   - проверить маршруты на BR-FW.
+
+2) HQ-CLI не получает DHCP:
+   - проверить VLAN200 на HQ-SW;
+   - проверить service-instance VLAN200 на HQ-RTR;
+   - проверить DHCP server на VLAN200;
+   - на HQ-CLI restart network.
+
+3) DNS не резолвит:
+   - named-checkconf -z;
+   - systemctl status bind;
+   - ss -tulpen | grep :53;
+   - host name 10.10.100.2;
+   - проверить serial зоны после изменений.
+
+4) Nginx не стартует:
+   - nginx -t;
+   - проверить пути сертификатов;
+   - проверить, нет ли другого server на том же listen/server_name;
+   - journalctl -u nginx -n 50.
+
+5) Docker compose не стартует:
+   - docker images;
+   - image name в compose должен совпадать с docker images;
+   - docker compose logs;
+   - контейнер приложения должен называться tespapp.
+
+6) Samba join не работает:
+   - DNS клиента должен указывать на Samba DNS/BR-SRV или нужный DNS домена;
+   - проверить время chrony;
+   - проверить host -t SRV _ldap._tcp.au-team.irpo;
+   - проверить пароль Administrator P@ssw0rd.
+
+7) SSH не пускает:
+   - ss -tulpen | grep 2026;
+   - ssh -vvv -p 2026 sshuser@host;
+   - journalctl -u sshd -n 50;
+   - AllowUsers sshuser;
+   - pam_faillock reset, если забанился.
+
+8) Ansible пишет host key warning:
+   - в ansible.cfg host_key_checking = False;
+   - добавить ansible_ssh_common_args.
+
+9) HTTPS с предупреждением:
+   - CA не добавлен в доверенные HQ-CLI;
+   - сертификат CN не совпадает с web.au-team.irpo/docker.au-team.irpo;
+   - браузер надо перезапустить;
+   - проверить curl -Iv.
+
+======================================================================
+КОНЕЦ ФАЙЛА
+======================================================================
